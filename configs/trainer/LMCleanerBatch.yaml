@@ -1,0 +1,69 @@
+# LMCleaner Batch-Level Configuration
+# 批次级在线遗忘算法
+#
+# 特点:
+# - 存储复杂度: O((N/B) * p)
+# - 初始偏差: δ[tz+1] = -η_tz * gbar[tz]
+# - 前向K步传播
+#
+# 使用方法:
+# 1. 预训练时使用TrainingLogger记录训练轨迹
+# 2. 运行遗忘: python src/train.py --config-name=unlearn.yaml trainer=LMCleanerBatch ...
+# 3. 评估遗忘效果
+
+handler: LMCleanerBatchLevel
+
+method_args:
+  # 训练日志目录 (TrainingLogger输出目录)
+  # 需要在预训练时使用TrainingLogger记录
+  training_log_dir: ???
+
+  # 截断窗口大小 (通常500-1000)
+  # 控制前向传播的步数,越大越精确但计算开销越大
+  K: 800
+
+  # HVP (Hessian-Vector Product) 模式
+  # - "GGN": 广义Gauss-Newton近似 (推荐,对交叉熵稳定)
+  # - "diag": 对角Hessian近似 (快速但粗糙)
+  # - "exact": 精确二阶autograd (仅小模型/测试)
+  # - "low_rank": 低秩近似 (TODO)
+  hessian_mode: GGN
+
+  # 阻尼系数 λ (数值稳定性)
+  # H ← H + λI
+  damping: 1e-4
+
+  # 是否在初始化时立即应用遗忘
+  # True: 在trainer初始化时就应用遗忘
+  # False: 在train()调用时应用遗忘
+  apply_immediately: false
+
+  # 审计日志输出目录 (可选)
+  # 记录每次遗忘操作的详细信息
+  audit_dir: ${paths.output_dir}/audit
+
+args:
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 16
+  gradient_accumulation_steps: 4
+  learning_rate: 1e-5
+  bf16: True
+  bf16_full_eval: True
+  logging_steps: 5
+  output_dir: ${paths.output_dir}
+  logging_dir: ${trainer.args.output_dir}/logs
+  report_to: none
+  ddp_find_unused_parameters: None
+  gradient_checkpointing: False
+  optim: adamw_torch
+  save_strategy: 'no'
+  save_only_model: True
+  weight_decay: 0.00
+  do_train: True
+  do_eval: False
+  eval_on_start: False
+  eval_strategy: 'no'
+  # LMCleaner主要通过参数校正实现遗忘
+  # 可选地在retain数据上微调1个epoch
+  num_train_epochs: 0  # 0表示只做参数校正,不微调
+  seed: 0

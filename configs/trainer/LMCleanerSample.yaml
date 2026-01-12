@@ -1,0 +1,65 @@
+# LMCleaner Sample-Level Configuration
+# 样本级在线遗忘算法
+#
+# 特点:
+# - 存储复杂度: O(N * p)
+# - 初始偏差: δ[tz+1] = -(η_tz / B) * ∇θ`(zj; θ[tz])
+# - 更精确但存储开销更大
+#
+# 使用方法:
+# 1. 预训练时使用TrainingLogger记录每个样本的梯度(mode="sample")
+# 2. 运行遗忘: python src/train.py --config-name=unlearn.yaml trainer=LMCleanerSample ...
+# 3. 评估遗忘效果
+
+handler: LMCleanerSampleLevel
+
+method_args:
+  # 训练日志目录 (TrainingLogger输出目录, mode="sample")
+  training_log_dir: ???
+
+  # 截断窗口大小 (通常500-1000)
+  K: 800
+
+  # HVP (Hessian-Vector Product) 模式
+  # - "GGN": 广义Gauss-Newton近似 (推荐)
+  # - "diag": 对角Hessian近似 (快速但粗糙)
+  # - "exact": 精确二阶autograd (仅小模型/测试)
+  hessian_mode: GGN
+
+  # 阻尼系数 λ
+  damping: 1e-4
+
+  # 训练时的批次大小
+  # 用于计算样本级初始偏差: v0 = -(η / B) * ∇θ`(zj)
+  batch_size_at_training: 1
+
+  # 是否在初始化时立即应用遗忘
+  apply_immediately: false
+
+  # 审计日志输出目录 (可选)
+  audit_dir: ${paths.output_dir}/audit
+
+args:
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 16
+  gradient_accumulation_steps: 4
+  learning_rate: 1e-5
+  bf16: True
+  bf16_full_eval: True
+  logging_steps: 5
+  output_dir: ${paths.output_dir}
+  logging_dir: ${trainer.args.output_dir}/logs
+  report_to: none
+  ddp_find_unused_parameters: None
+  gradient_checkpointing: False
+  optim: adamw_torch
+  save_strategy: 'no'
+  save_only_model: True
+  weight_decay: 0.00
+  do_train: True
+  do_eval: False
+  eval_on_start: False
+  eval_strategy: 'no'
+  # 样本级遗忘通常只需要参数校正,不需要额外微调
+  num_train_epochs: 0
+  seed: 0
