@@ -96,6 +96,38 @@ class TrainingLogger:
                    f"save_indices_only={save_indices_only}, save_rng_state={save_rng_state}, "
                    f"compute_diag_h={compute_diag_h}")
 
+    def _prune_old_entries(self):
+        """
+        Prune old entries from dictionaries to prevent unbounded memory growth (Fix #2)
+
+        Keep only the most recent entries up to save_interval to prevent memory accumulation
+        between saves. Since we clear these dicts after each save, we only need to limit
+        growth within a save interval.
+        """
+        if self.save_interval <= 0:
+            return
+
+        # Limit to 2x save_interval as a safety buffer
+        max_entries = max(self.save_interval * 2, 100)
+
+        # Prune sample_indices_per_step
+        if len(self.sample_indices_per_step) > max_entries:
+            # Keep only the most recent entries
+            sorted_keys = sorted(self.sample_indices_per_step.keys())
+            keys_to_remove = sorted_keys[:-max_entries]
+            for key in keys_to_remove:
+                del self.sample_indices_per_step[key]
+            logger.debug(f"Pruned {len(keys_to_remove)} old entries from sample_indices_per_step")
+
+        # Prune rng_states_per_step
+        if len(self.rng_states_per_step) > max_entries:
+            # Keep only the most recent entries
+            sorted_keys = sorted(self.rng_states_per_step.keys())
+            keys_to_remove = sorted_keys[:-max_entries]
+            for key in keys_to_remove:
+                del self.rng_states_per_step[key]
+            logger.debug(f"Pruned {len(keys_to_remove)} old entries from rng_states_per_step")
+
     def register_step(
         self,
         step_id: int,
@@ -148,6 +180,9 @@ class TrainingLogger:
                 'torch': torch.get_rng_state(),
                 'torch_cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
             }
+
+        # Prune old entries to prevent unbounded growth (Fix #2)
+        self._prune_old_entries()
 
         # 保存批次数据(可选)
         if batch_data is not None and self.save_batch_data:
@@ -319,6 +354,20 @@ class TrainingLogger:
             pickle.dump(serializable_records, f)
 
         logger.info(f"Saved training log at step {step_id} to {self.log_dir}")
+
+        # Clear dictionaries after saving to free memory (Fix #1)
+        if self.save_indices_only and self.sample_indices_per_step:
+            self.sample_indices_per_step.clear()
+            logger.debug(f"Cleared sample_indices_per_step after saving")
+
+        if self.save_rng_state and self.rng_states_per_step:
+            self.rng_states_per_step.clear()
+            logger.debug(f"Cleared rng_states_per_step after saving")
+
+        # Explicitly clear CUDA cache to reduce fragmentation (Fix #4)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.debug(f"Cleared CUDA cache after saving")
 
     def load_from_disk(self, step_id: Optional[int] = None):
         """

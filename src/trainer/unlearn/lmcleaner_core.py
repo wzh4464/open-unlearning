@@ -497,5 +497,10 @@ def compute_param_update_vector(
 
 
 def clone_parameters(model: nn.Module) -> List[torch.Tensor]:
-    """克隆模型参数"""
-    return [p.clone().detach() for p in model.parameters() if p.requires_grad]
+    """
+    克隆模型参数并移到CPU以减少GPU显存压力 (Fix #3)
+
+    Returns:
+        List of cloned parameters on CPU
+    """
+    return [p.clone().detach().cpu() for p in model.parameters() if p.requires_grad]
