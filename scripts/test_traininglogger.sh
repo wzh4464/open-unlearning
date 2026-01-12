@@ -21,8 +21,8 @@ echo ""
 
 # Configuration
 TASK_NAME=quick_test
-BASE_MODEL=/home/jie/Phi-3.5-mini-instruct
-MODEL_NAME=Phi-3.5-mini-instruct  # For config reference
+BASE_MODEL=/home/jie/phi-1_5
+MODEL_NAME=phi-1_5  # For config reference
 MAX_STEPS=50
 BATCH_SIZE=2
 K_VALUE=20
@@ -35,7 +35,7 @@ echo "Base model: ${BASE_MODEL}"
 echo "Max steps: ${MAX_STEPS}"
 echo "=========================================="
 
-CUDA_VISIBLE_DEVICES=0,1,2 accelerate launch \
+CUDA_VISIBLE_DEVICES=1,2 accelerate launch \
   --config_file configs/accelerate/default_config.yaml \
   --main_process_port ${MASTER_PORT} \
   src/train.py --config-name=train.yaml \
@@ -67,7 +67,7 @@ echo "Task: ${TASK_NAME}_unlearn"
 echo "K: ${K_VALUE}"
 echo "=========================================="
 
-CUDA_VISIBLE_DEVICES=0,1,2 accelerate launch \
+CUDA_VISIBLE_DEVICES=1,2 accelerate launch \
   --config_file configs/accelerate/default_config.yaml \
   --main_process_port ${MASTER_PORT} \
   src/train.py --config-name=unlearn.yaml \
