@@ -1,0 +1,38 @@
+# TIM Parameter Rollback Configuration
+# 使用训练轨迹进行参数直接回退的 Unlearning 方法
+
+handler: TIMParameterRollback
+method_args:
+  # tim_all_epochs 输出目录，包含训练轨迹数据
+  tim_output_dir: ???
+  
+  # 回退强度，1.0=完全回退，<1.0=部分回退
+  rollback_strength: 1.0
+  
+  # 训练轨迹数据格式：'json' 或 'pickle'
+  trajectory_format: json
+
+args:
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 16
+  gradient_accumulation_steps: 4
+  learning_rate: 1e-5
+  bf16: True
+  bf16_full_eval: True
+  logging_steps: 5
+  output_dir: ${paths.output_dir}
+  logging_dir: ${trainer.args.output_dir}/logs
+  report_to: none
+  ddp_find_unused_parameters: None
+  gradient_checkpointing: False
+  optim: adamw_torch
+  save_strategy: 'no'
+  save_only_model: True
+  weight_decay: 0.00
+  do_train: True
+  do_eval: False
+  eval_on_start: False
+  eval_strategy: 'no'
+  num_train_epochs: 1  # rollback 方法通常只需要 1 个 epoch
+  seed: 0
+
