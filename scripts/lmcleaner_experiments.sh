@@ -11,13 +11,19 @@
 # 使用方法:
 # bash scripts/lmcleaner_experiments.sh
 
+# Memory optimization: Set PyTorch CUDA allocator configuration
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:64
+export HF_HUB_DISABLE_TELEMETRY=1
+# export TOKENIZERS_PARALLELISM=false
+
 export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 echo "Master Port: $MASTER_PORT"
 
 # 实验配置
+MODEL_DIR=/home/jie
 models=(
     "Llama-3.2-1B-Instruct"
-    # "Llama-3.2-3B-Instruct"  # 更大模型,可选
+    # "phi-1_5"
 )
 
 # LMCleaner变体和对应的实验配置
@@ -46,9 +52,9 @@ hessian_modes=(
     # "diag"   # 快速测试,可选
 )
 
-# 训练配置
-per_device_train_batch_size=4
-gradient_accumulation_steps=4
+# 训练配置 (Memory-optimized settings)
+per_device_train_batch_size=2  # Reduced from 4 to minimize memory usage
+gradient_accumulation_steps=8  # Increased from 4 to maintain effective batch size
 
 ########################################################################################################################
 ########################################### Step 1: 预训练并记录训练日志 ################################################
@@ -64,7 +70,7 @@ STORAGE_MODE=${STORAGE_MODE:-"light"}
 
 for model in "${models[@]}"; do
     TASK=tofu_${model}_full_${STORAGE_MODE}
-    BASE_MODEL=open-unlearning/${model}
+    BASE_MODEL=${MODEL_DIR}/${model}
 
     echo "=========================================="
     echo "Finetuning with ${STORAGE_MODE} storage mode"
@@ -79,13 +85,14 @@ for model in "${models[@]}"; do
             task_name=${TASK} \
             model=${model} \
             model.model_args.pretrained_model_name_or_path=${BASE_MODEL} \
-            trainer.args.training_logger.enabled=true \
-            trainer.args.training_logger.log_dir=saves/train_logs/${TASK} \
-            trainer.args.training_logger.mode=batch \
-            trainer.args.training_logger.save_indices_only=true \
-            trainer.args.training_logger.save_batch_data=false \
-            trainer.args.training_logger.save_rng_state=true \
-            trainer.args.training_logger.save_interval=100
+            model.tokenizer_args.pretrained_model_name_or_path=${BASE_MODEL} \
+            +trainer.args.training_logger.enabled=true \
+            +trainer.args.training_logger.log_dir=saves/train_logs/${TASK} \
+            +trainer.args.training_logger.mode=batch \
+            +trainer.args.training_logger.save_indices_only=true \
+            +trainer.args.training_logger.save_batch_data=false \
+            +trainer.args.training_logger.save_rng_state=true \
+            +trainer.args.training_logger.save_interval=100
 
     elif [ "$STORAGE_MODE" == "heavy" ]; then
         # 重存储模式: 保存完整batch张量
@@ -94,13 +101,14 @@ for model in "${models[@]}"; do
             task_name=${TASK} \
             model=${model} \
             model.model_args.pretrained_model_name_or_path=${BASE_MODEL} \
-            trainer.args.training_logger.enabled=true \
-            trainer.args.training_logger.log_dir=saves/train_logs/${TASK} \
-            trainer.args.training_logger.mode=batch \
-            trainer.args.training_logger.save_indices_only=false \
-            trainer.args.training_logger.save_batch_data=true \
-            trainer.args.training_logger.save_rng_state=false \
-            trainer.args.training_logger.save_interval=50
+            model.tokenizer_args.pretrained_model_name_or_path=${BASE_MODEL} \
+            +trainer.args.training_logger.enabled=true \
+            +trainer.args.training_logger.log_dir=saves/train_logs/${TASK} \
+            +trainer.args.training_logger.mode=batch \
+            +trainer.args.training_logger.save_indices_only=false \
+            +trainer.args.training_logger.save_batch_data=true \
+            +trainer.args.training_logger.save_rng_state=false \
+            +trainer.args.training_logger.save_interval=50
 
     elif [ "$STORAGE_MODE" == "diag" ]; then
         # 对角Hessian模式: 预计算对角Hessian
@@ -109,13 +117,14 @@ for model in "${models[@]}"; do
             task_name=${TASK} \
             model=${model} \
             model.model_args.pretrained_model_name_or_path=${BASE_MODEL} \
-            trainer.args.training_logger.enabled=true \
-            trainer.args.training_logger.log_dir=saves/train_logs/${TASK} \
-            trainer.args.training_logger.mode=batch \
-            trainer.args.training_logger.compute_diag_h=true \
-            trainer.args.training_logger.save_indices_only=true \
-            trainer.args.training_logger.save_batch_data=false \
-            trainer.args.training_logger.save_rng_state=true
+            model.tokenizer_args.pretrained_model_name_or_path=${BASE_MODEL} \
+            +trainer.args.training_logger.enabled=true \
+            +trainer.args.training_logger.log_dir=saves/train_logs/${TASK} \
+            +trainer.args.training_logger.mode=batch \
+            +trainer.args.training_logger.compute_diag_h=true \
+            +trainer.args.training_logger.save_indices_only=true \
+            +trainer.args.training_logger.save_batch_data=false \
+            +trainer.args.training_logger.save_rng_state=true
     fi
 
     echo "Completed finetuning for ${model} with ${STORAGE_MODE} storage"
@@ -157,8 +166,8 @@ for split in "${splits[@]}"; do
                         continue
                     fi
 
-                    # 运行遗忘
-                    CUDA_VISIBLE_DEVICES=0,1,2 accelerate launch \
+                    # 运行遗忘 (with memory optimization)
+                    CUDA_VISIBLE_DEVICES=1,3 accelerate launch \
                         --config_file configs/accelerate/default_config.yaml \
                         --main_process_port $MASTER_PORT \
                         src/train.py --config-name=unlearn.yaml \
@@ -175,7 +184,10 @@ for split in "${splits[@]}"; do
                         trainer.args.per_device_train_batch_size=$per_device_train_batch_size \
                         trainer.args.gradient_accumulation_steps=$gradient_accumulation_steps \
                         trainer.args.ddp_find_unused_parameters=false \
-                        trainer.args.gradient_checkpointing=true
+                        trainer.args.gradient_checkpointing=true \
+                        ++trainer.args.bf16=true \
+                        +model.model_args.attn_implementation=flash_attention_2 \
+                        +data.max_seq_length=1024
 
                     # 评估遗忘效果
                     echo "Evaluating ${task_name}..."
@@ -218,8 +230,8 @@ for split in "${splits[@]}"; do
         echo "Baseline: ${task_name}"
         echo "=========================================="
 
-        # 运行baseline
-        CUDA_VISIBLE_DEVICES=0,1,2 accelerate launch \
+        # 运行baseline (with memory optimization)
+        CUDA_VISIBLE_DEVICES=1,3 accelerate launch \
             --config_file configs/accelerate/default_config.yaml \
             --main_process_port $MASTER_PORT \
             src/train.py --config-name=unlearn.yaml \
@@ -232,7 +244,12 @@ for split in "${splits[@]}"; do
             model.model_args.pretrained_model_name_or_path=${model_path} \
             trainer.method_args.tim_output_dir=${tim_output_dir} \
             trainer.args.per_device_train_batch_size=$per_device_train_batch_size \
-            trainer.args.gradient_accumulation_steps=$gradient_accumulation_steps
+            trainer.args.gradient_accumulation_steps=$gradient_accumulation_steps \
+            ++trainer.args.bf16=true \
+            +trainer.args.gradient_checkpointing=true \
+            +trainer.args.ddp_find_unused_parameters=false \
+            +model.model_args.attn_implementation=flash_attention_2 \
+            +data.max_seq_length=1024
 
         # 评估baseline
         CUDA_VISIBLE_DEVICES=0 python src/eval.py \
