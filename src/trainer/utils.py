@@ -141,29 +141,29 @@ class CudaCacheCallback(TrainerCallback):
     Callback to periodically clear CUDA cache during training to reduce memory fragmentation.
     This callback synchronizes all processes before clearing the cache to ensure consistency.
 
+    Instead of creating its own Accelerator instance, this callback uses the trainer's
+    Accelerator to avoid conflicts in distributed training scenarios.
+
     Args:
         interval (int): Number of steps between cache clearing operations. Default: 10
     """
     def __init__(self, interval=10):
         self.interval = interval
-        try:
-            from accelerate import Accelerator
-            self.acc = Accelerator()
-        except ImportError:
-            self.acc = None
 
     def on_step_end(self, args, state, control, **kwargs):
         """Called at the end of each training step"""
         if state.global_step > 0 and state.global_step % self.interval == 0:
-            if self.acc is not None:
-                # Synchronize all processes before clearing cache
-                self.acc.wait_for_everyone()
+            # Get the trainer instance from kwargs to access its accelerator
+            trainer = kwargs.get("trainer")
+            if trainer is not None and hasattr(trainer, "accelerator"):
+                # Use trainer's accelerator to synchronize processes
+                trainer.accelerator.wait_for_everyone()
                 # Clear CUDA cache on all devices
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
                 # Synchronize again after clearing
-                self.acc.wait_for_everyone()
+                trainer.accelerator.wait_for_everyone()
             else:
-                # Fallback if accelerator is not available
+                # Fallback if trainer or accelerator is not available
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()

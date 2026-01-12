@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Union
 
 import os
 import logging
+import warnings
 import torch
 from transformers import Trainer
 from torch.utils.data import Dataset
@@ -18,7 +19,12 @@ class FinetuneTrainer(Trainer):
         self.evaluators = evaluators
         self.template_args = template_args
         self.training_logger = training_logger
-        super().__init__(*args, **kwargs)
+
+        # Handle tokenizer -> processing_class parameter name change in transformers 5.0+
+        # Suppress the FutureWarning until we upgrade to transformers 5.0+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=FutureWarning, message=".*tokenizer.*deprecated.*processing_class.*")
+            super().__init__(*args, **kwargs)
 
     def evaluate(
         self,
