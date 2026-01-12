@@ -114,8 +114,19 @@ We provide several variants for each of the components in the unlearning pipelin
 # Environment setup
 conda create -n unlearning python=3.11
 conda activate unlearning
-pip install .[lm_eval]
-pip install --no-build-isolation flash-attn==2.6.3
+
+# We recommend using uv for environment management, which handles optional extras cleanly across macOS and Linux.
+
+# Using uv (recommended)
+# macOS minimal setup (MPS, no CUDA)
+uv sync --extra macos-mps
+
+# Linux GPU setup (CUDA, flash-attn)
+uv pip install --index-url https://download.pytorch.org/whl/cu124 torch
+uv sync --extra linux-cuda --no-build-isolation
+
+# Linux CPU-only fallback
+uv sync --extra linux-cpu
 
 # Data setup
 python setup_data.py --eval # saves/eval now contains evaluation results of the uploaded models
