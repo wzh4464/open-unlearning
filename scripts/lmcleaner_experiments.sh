@@ -19,6 +19,11 @@ export HF_HUB_DISABLE_TELEMETRY=1
 export MASTER_PORT=$(python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 echo "Master Port: $MASTER_PORT"
 
+# GPU device bindings (ensure paired GPUs by default)
+TRAIN_GPUS=${TRAIN_GPUS:-"1,3"}
+UNLEARN_GPUS=${UNLEARN_GPUS:-"1,3"}
+EVAL_GPUS=${EVAL_GPUS:-"1,3"}
+
 # 实验配置
 MODEL_DIR=/home/jie
 models=(
@@ -80,7 +85,10 @@ for model in "${models[@]}"; do
 
     if [ "$STORAGE_MODE" == "light" ]; then
         # 轻存储模式: 只保存索引+随机种子
-        uv run python src/train.py --config-name=train.yaml \
+        CUDA_VISIBLE_DEVICES=${TRAIN_GPUS} accelerate launch \
+            --config_file configs/accelerate/default_config.yaml \
+            --main_process_port $MASTER_PORT \
+            src/train.py --config-name=train.yaml \
             experiment=finetune/tofu/default \
             task_name=${TASK} \
             model=${model} \
@@ -96,7 +104,10 @@ for model in "${models[@]}"; do
 
     elif [ "$STORAGE_MODE" == "heavy" ]; then
         # 重存储模式: 保存完整batch张量
-        uv run python src/train.py --config-name=train.yaml \
+        CUDA_VISIBLE_DEVICES=${TRAIN_GPUS} accelerate launch \
+            --config_file configs/accelerate/default_config.yaml \
+            --main_process_port $MASTER_PORT \
+            src/train.py --config-name=train.yaml \
             experiment=finetune/tofu/default \
             task_name=${TASK} \
             model=${model} \
@@ -112,7 +123,10 @@ for model in "${models[@]}"; do
 
     elif [ "$STORAGE_MODE" == "diag" ]; then
         # 对角Hessian模式: 预计算对角Hessian
-        uv run python src/train.py --config-name=train.yaml \
+        CUDA_VISIBLE_DEVICES=${TRAIN_GPUS} accelerate launch \
+            --config_file configs/accelerate/default_config.yaml \
+            --main_process_port $MASTER_PORT \
+            src/train.py --config-name=train.yaml \
             experiment=finetune/tofu/default \
             task_name=${TASK} \
             model=${model} \
@@ -167,7 +181,7 @@ for split in "${splits[@]}"; do
                     fi
 
                     # 运行遗忘 (with memory optimization)
-                    CUDA_VISIBLE_DEVICES=1,3 accelerate launch \
+                    CUDA_VISIBLE_DEVICES=${UNLEARN_GPUS} accelerate launch \
                         --config_file configs/accelerate/default_config.yaml \
                         --main_process_port $MASTER_PORT \
                         src/train.py --config-name=unlearn.yaml \
@@ -186,12 +200,11 @@ for split in "${splits[@]}"; do
                         trainer.args.ddp_find_unused_parameters=false \
                         trainer.args.gradient_checkpointing=true \
                         ++trainer.args.bf16=true \
-                        +model.model_args.attn_implementation=flash_attention_2 \
                         +data.max_seq_length=1024
 
                     # 评估遗忘效果
                     echo "Evaluating ${task_name}..."
-                    CUDA_VISIBLE_DEVICES=0 python src/eval.py \
+                    CUDA_VISIBLE_DEVICES=${EVAL_GPUS} python src/eval.py \
                         experiment=eval/tofu/default.yaml \
                         forget_split=${forget_split} \
                         holdout_split=${holdout_split} \
@@ -231,7 +244,7 @@ for split in "${splits[@]}"; do
         echo "=========================================="
 
         # 运行baseline (with memory optimization)
-        CUDA_VISIBLE_DEVICES=1,3 accelerate launch \
+        CUDA_VISIBLE_DEVICES=${UNLEARN_GPUS} accelerate launch \
             --config_file configs/accelerate/default_config.yaml \
             --main_process_port $MASTER_PORT \
             src/train.py --config-name=unlearn.yaml \
@@ -248,11 +261,10 @@ for split in "${splits[@]}"; do
             ++trainer.args.bf16=true \
             +trainer.args.gradient_checkpointing=true \
             +trainer.args.ddp_find_unused_parameters=false \
-            +model.model_args.attn_implementation=flash_attention_2 \
             +data.max_seq_length=1024
 
         # 评估baseline
-        CUDA_VISIBLE_DEVICES=0 python src/eval.py \
+        CUDA_VISIBLE_DEVICES=${EVAL_GPUS} python src/eval.py \
             experiment=eval/tofu/default.yaml \
             forget_split=${forget_split} \
             holdout_split=${holdout_split} \
