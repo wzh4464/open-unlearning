@@ -3,6 +3,7 @@ import random
 import numpy as np
 from torch import nn
 import torch.nn.functional as F
+from transformers import TrainerCallback
 
 
 def seed_everything(seed=42):
@@ -132,3 +133,37 @@ def compute_satimp_loss(model, inputs, beta1, beta2):
         shift_labels.view(-1) != -100
     ].mean()
     return forget_loss, outputs
+
+
+# Memory optimization callback for periodic CUDA cache clearing
+class CudaCacheCallback(TrainerCallback):
+    """
+    Callback to periodically clear CUDA cache during training to reduce memory fragmentation.
+    This callback synchronizes all processes before clearing the cache to ensure consistency.
+
+    Args:
+        interval (int): Number of steps between cache clearing operations. Default: 10
+    """
+    def __init__(self, interval=10):
+        self.interval = interval
+        try:
+            from accelerate import Accelerator
+            self.acc = Accelerator()
+        except ImportError:
+            self.acc = None
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Called at the end of each training step"""
+        if state.global_step > 0 and state.global_step % self.interval == 0:
+            if self.acc is not None:
+                # Synchronize all processes before clearing cache
+                self.acc.wait_for_everyone()
+                # Clear CUDA cache on all devices
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                # Synchronize again after clearing
+                self.acc.wait_for_everyone()
+            else:
+                # Fallback if accelerator is not available
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()

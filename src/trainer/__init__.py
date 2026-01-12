@@ -5,6 +5,7 @@ from transformers import Trainer, TrainingArguments
 
 from trainer.base import FinetuneTrainer
 from trainer.training_logger import TrainingLogger
+from trainer.utils import CudaCacheCallback
 from trainer.unlearn.grad_ascent import GradAscent
 from trainer.unlearn.grad_diff import GradDiff
 from trainer.unlearn.npo import NPO
@@ -106,6 +107,9 @@ def load_trainer(
         else:
             logger.info("Skipping TrainingLogger initialization on non-main process (distributed training)")
 
+    # Initialize callbacks list with CudaCacheCallback for memory optimization
+    callbacks = [CudaCacheCallback(interval=10)]
+
     trainer = trainer_cls(
         model=model,
         train_dataset=train_dataset,
@@ -116,11 +120,13 @@ def load_trainer(
         evaluators=evaluators,
         template_args=template_args,
         training_logger=training_logger,
+        callbacks=callbacks,
         **method_args,
     )
     logger.info(
         f"{trainer_handler_name} Trainer loaded, output_dir: {trainer_args.output_dir}"
     )
+    logger.info("CudaCacheCallback enabled: clearing CUDA cache every 10 steps")
     return trainer, trainer_args
 
 
