@@ -15,10 +15,6 @@ import torch.nn as nn
 from pathlib import Path
 import tempfile
 import json
-import sys
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from trainer.training_logger import TrainingLogger
 from trainer.unlearn.lmcleaner_core import StepRecord
@@ -28,26 +24,7 @@ from trainer.unlearn.lmcleaner_core import StepRecord
 # Test Fixtures
 # ============================================================================
 
-@pytest.fixture
-def simple_model():
-    """Create a simple model for testing"""
-    class SimpleModel(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.linear1 = nn.Linear(10, 5)
-            self.linear2 = nn.Linear(5, 2)
-            self.device = torch.device('cpu')
-
-        def forward(self, input_ids, **kwargs):
-            x = self.linear1(input_ids.float())
-            logits = self.linear2(x)
-            return type('Output', (), {'logits': logits, 'loss': None})()
-
-        def parameters(self, recurse=True):
-            return super().parameters(recurse)
-
-    return SimpleModel()
-
+# simple_model fixture is defined in conftest.py
 
 @pytest.fixture
 def training_log_dir(simple_model):

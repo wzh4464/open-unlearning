@@ -15,10 +15,6 @@ import torch.nn as nn
 from pathlib import Path
 import tempfile
 import json
-import sys
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from trainer.training_logger import TrainingLogger, BatchReconstructor
 from trainer.unlearn.lmcleaner_core import StepRecord
@@ -28,34 +24,7 @@ from trainer.unlearn.lmcleaner_core import StepRecord
 # Test Fixtures
 # ============================================================================
 
-@pytest.fixture
-def simple_model():
-    """Create a simple model for testing"""
-    class SimpleModel(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.linear = nn.Linear(10, 5)
-
-        def forward(self, x):
-            return self.linear(x)
-
-    return SimpleModel()
-
-
-@pytest.fixture
-def temp_log_dir():
-    """Create temporary directory for logs"""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
-
-
-@pytest.fixture
-def batch_data():
-    """Create sample batch data"""
-    return {
-        'input_ids': torch.randn(4, 10),
-        'labels': torch.randint(0, 2, (4,))
-    }
+# simple_model, batch_data, and temp_log_dir fixtures are defined in conftest.py
 
 
 # ============================================================================
@@ -373,10 +342,9 @@ class TestSaveLoad:
         logger2 = TrainingLogger(log_dir=str(temp_log_dir))
         logger2.load_from_disk()
 
-        # After save, sample_indices_per_step is cleared (line 360 in training_logger.py)
-        # So we expect it to be empty or only contain indices from last save interval
-        # Since save_interval=10 and we only have 5 steps, indices are cleared after save
-        assert len(logger2.sample_indices_per_step) >= 0  # May be empty due to clearing
+        # After save_to_disk(), sample_indices_per_step is cleared to free memory
+        # This is expected behavior for memory management
+        assert len(logger2.sample_indices_per_step) == 0
 
 
 # ============================================================================
@@ -489,12 +457,11 @@ class TestIntegration:
         # Verify loaded data
         assert len(logger2.step_log.buffer) == 10
 
-        # sample_indices_per_step is cleared after save (line 360)
-        # Only indices added after last save remain
-        # With save_interval=5, saves happen at steps 0 and 5
-        # After final save_to_disk(), indices are cleared
-        # So we expect only indices from steps after last automatic save (6-9)
-        assert len(logger2.sample_indices_per_step) >= 0  # May vary based on save timing
+        # sample_indices_per_step is cleared after save_to_disk() for memory management
+        # Only indices added after the last automatic save remain
+        # With save_interval=5, automatic saves happen at steps 0 and 5
+        # After final save_to_disk(), all indices are cleared
+        assert len(logger2.sample_indices_per_step) == 0
 
         # Verify specific step
         record = logger2.step_log.get(5)
