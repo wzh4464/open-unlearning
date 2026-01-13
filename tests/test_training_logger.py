@@ -14,10 +14,8 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 import tempfile
-import json
 
 from trainer.training_logger import TrainingLogger, BatchReconstructor
-from trainer.unlearn.lmcleaner_core import StepRecord
 
 
 # ============================================================================
@@ -76,7 +74,7 @@ class TestTrainingLoggerInit:
             log_dir = Path(tmpdir) / "new_logs"
             assert not log_dir.exists()
 
-            logger = TrainingLogger(log_dir=str(log_dir))
+            TrainingLogger(log_dir=str(log_dir))
             assert log_dir.exists()
 
 

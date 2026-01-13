@@ -130,11 +130,11 @@ uv run pytest tests/test_lmcleaner_core.py::TestStepLog::test_buffer_overflow -v
 
 ## Test Statistics
 
-- **Total Tests:** 68
-- **Core Components:** 35 tests
-- **Training Logger:** 22 tests
-- **Trainers:** 11 tests
-- **Overall Coverage:** ~85%
+- **Total Tests:** 63
+- **Core Components:** 33 tests
+- **Training Logger:** 19 tests
+- **Trainers:** 10 tests
+- **Test Results:** 61 passing, 2 skipped (known code bugs)
 
 ## What's NOT Tested
 
@@ -182,7 +182,10 @@ When adding new functionality to LMCleaner:
 
 ## Known Issues
 
-None currently. All tests pass consistently.
+1. **StepLog Buffer Overflow:** Known bug in `StepLog` circular buffer behavior where step_map indices become invalid after deque rotation. Corresponding test is skipped.
+2. **`_flatten()` Empty List Handling:** Known bug when `_flatten()` is called with an empty list. Corresponding test is skipped.
+
+All non-skipped tests pass consistently.
 
 ## Future Improvements
 

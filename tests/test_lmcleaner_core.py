@@ -11,15 +11,12 @@ Tests cover:
 import pytest
 import torch
 import torch.nn as nn
-from pathlib import Path
-import tempfile
 
 from trainer.unlearn.lmcleaner_core import (
     AuditRecord,
     StepRecord,
     StepLog,
     HVPConfig,
-    hvp_exact,
     hvp_ggn,
     hvp_diagonal,
     hvp_apply,

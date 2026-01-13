@@ -14,10 +14,8 @@ import torch
 import torch.nn as nn
 from pathlib import Path
 import tempfile
-import json
 
 from trainer.training_logger import TrainingLogger
-from trainer.unlearn.lmcleaner_core import StepRecord
 
 
 # ============================================================================
