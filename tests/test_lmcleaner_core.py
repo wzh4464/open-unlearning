@@ -142,7 +142,6 @@ class TestStepLog:
         for i in range(5):
             assert log.get(i) is not None
 
-    @pytest.mark.skip(reason="StepLog has a known bug with buffer overflow - indices become invalid after rotation")
     def test_buffer_overflow(self):
         """Test circular buffer overflow behavior"""
         log = StepLog(max_size=3)
@@ -249,7 +248,6 @@ class TestUtilityFunctions:
         flat = _flatten([t1, t2])
         assert flat.shape == (17,)
 
-    @pytest.mark.skip(reason="_flatten() has a known bug - doesn't handle empty list")
     def test_flatten_empty_list(self):
         """Test flattening empty list"""
         flat = _flatten([])
