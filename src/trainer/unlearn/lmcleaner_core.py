@@ -65,7 +65,7 @@ class StepLog:
     def __init__(self, max_size: int = 1000):
         self.max_size = max_size
         self.buffer = deque(maxlen=max_size)
-        self.step_map = {}  # step_id -> index in buffer
+        self.step_map = {}  # step_id -> StepRecord (direct reference)
 
     def add(self, record: StepRecord):
         """添加新的步骤记录"""
@@ -77,17 +77,11 @@ class StepLog:
 
         # 添加新记录
         self.buffer.append(record)
-        self.step_map[record.step_id] = len(self.buffer) - 1
+        self.step_map[record.step_id] = record  # Store record directly
 
     def get(self, step_id: int) -> Optional[StepRecord]:
         """获取指定步骤的记录"""
-        if step_id not in self.step_map:
-            return None
-        idx = self.step_map[step_id]
-        # 检查索引是否仍然有效(环形缓冲区可能已覆盖)
-        if idx < len(self.buffer) and self.buffer[idx].step_id == step_id:
-            return self.buffer[idx]
-        return None
+        return self.step_map.get(step_id)
 
     def __getitem__(self, step_id: int) -> Optional[StepRecord]:
         return self.get(step_id)
@@ -461,6 +455,8 @@ def apply_correction(
 
 def _flatten(tensors: List[torch.Tensor]) -> torch.Tensor:
     """将张量列表展平为单个向量"""
+    if not tensors:
+        return torch.empty(0)  # Use empty() for consistent dtype (float32)
     return torch.cat([t.view(-1) for t in tensors])
 
 
