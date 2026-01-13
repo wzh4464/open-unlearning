@@ -4,6 +4,13 @@ import numpy as np
 from torch import nn
 import torch.nn.functional as F
 from transformers import TrainerCallback
+import time
+import json
+import logging
+from pathlib import Path
+from dataclasses import dataclass, asdict
+
+logger = logging.getLogger(__name__)
 
 
 def seed_everything(seed=42):
@@ -167,3 +174,110 @@ class CudaCacheCallback(TrainerCallback):
                 # Fallback if trainer or accelerator is not available
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+
+
+@dataclass
+class EfficiencyMetrics:
+    """Efficiency metrics for unlearning methods"""
+    unlearning_time_seconds: float = 0.0  # Time for unlearning operation only
+    peak_gpu_memory_mb: float = 0.0
+    tokens_per_second: float = 0.0
+    model_size_mb: float = 0.0
+    requires_retain_set: bool = False
+    total_steps: int = 0  # Number of training steps during unlearning
+
+    def to_dict(self):
+        return asdict(self)
+
+    def save(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, 'w') as f:
+            json.dump(self.to_dict(), f, indent=2)
+
+
+class EfficiencyTracker(TrainerCallback):
+    """Track computational and storage efficiency metrics during unlearning
+
+    Note: This tracks UNLEARNING time specifically, not the initial training time.
+    For unlearning benchmarks, we care about the cost of the unlearning operation itself.
+    """
+
+    def __init__(self, output_dir: str = None):
+        self.output_dir = Path(output_dir) if output_dir else None
+        self.start_time = None
+        self.peak_memory = 0.0
+
+    def on_train_begin(self, args, state, control, **kwargs):
+        """Called at the beginning of unlearning training"""
+        self.start_time = time.time()
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Update peak memory after each step"""
+        if torch.cuda.is_available():
+            current_memory = torch.cuda.max_memory_allocated() / (1024 ** 2)
+            self.peak_memory = max(self.peak_memory, current_memory)
+
+    def on_train_end(self, args, state, control, model=None, **kwargs):
+        """Compute and save final unlearning efficiency metrics"""
+        if not self.start_time:
+            logger.warning("Start time was not recorded, timing metrics may be inaccurate")
+
+        unlearning_time = time.time() - self.start_time if self.start_time else 0
+
+        # Use state.global_step for accurate step count
+        total_steps = state.global_step if hasattr(state, 'global_step') else 0
+
+        # Estimate tokens processed during unlearning
+        tokens_per_sec = 0
+        if hasattr(state, 'num_input_tokens_seen') and state.num_input_tokens_seen > 0:
+            tokens_per_sec = state.num_input_tokens_seen / unlearning_time if unlearning_time > 0 else 0
+
+        # Get model size
+        model_size_mb = 0
+        if model is not None:
+            model_size_mb = sum(p.numel() * p.element_size() for p in model.parameters()) / (1024 ** 2)
+
+        # Determine if method requires retain set (check trainer type)
+        requires_retain_set = False
+        trainer = kwargs.get('trainer')
+        if trainer is not None:
+            trainer_name = trainer.__class__.__name__
+            # Methods that use retain set for regularization
+            retain_set_methods = ['GradDiff', 'NPO', 'DPO', 'SimNPO', 'RMU', 'UNDIAL']
+            requires_retain_set = any(method in trainer_name for method in retain_set_methods)
+
+        metrics = EfficiencyMetrics(
+            unlearning_time_seconds=unlearning_time,
+            peak_gpu_memory_mb=self.peak_memory,
+            tokens_per_second=tokens_per_sec,
+            model_size_mb=model_size_mb,
+            requires_retain_set=requires_retain_set,
+            total_steps=total_steps
+        )
+
+        # Save metrics
+        if self.output_dir:
+            metrics.save(self.output_dir / "efficiency_metrics.json")
+
+        # Log efficiency metrics via project logger
+        logger.info(
+            "\n%s\n"
+            "Unlearning Efficiency Metrics:\n"
+            "  Unlearning Time: %.2fs\n"
+            "  Total Steps: %d\n"
+            "  Peak GPU Memory: %.2f MB\n"
+            "  Tokens/Second: %.2f\n"
+            "  Model Size: %.2f MB\n"
+            "  Requires Retain Set: %s\n"
+            "%s",
+            "=" * 50,
+            unlearning_time,
+            total_steps,
+            self.peak_memory,
+            tokens_per_sec,
+            model_size_mb,
+            requires_retain_set,
+            "=" * 50,
+        )

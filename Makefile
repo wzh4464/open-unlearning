@@ -11,4 +11,4 @@ style:
 	ruff format $(check_dirs) setup.py setup_data.py
 
 test:
-	CUDA_VISIBLE_DEVICES= pytest tests/
+	CUDA_VISIBLE_DEVICES= uv run pytest tests/
