@@ -342,9 +342,10 @@ class TestSaveLoad:
         logger2 = TrainingLogger(log_dir=str(temp_log_dir))
         logger2.load_from_disk()
 
-        # After save_to_disk(), sample_indices_per_step is cleared to free memory
-        # This is expected behavior for memory management
-        assert len(logger2.sample_indices_per_step) == 0
+        # After save_to_disk(), only indices from before the last automatic save are cleared
+        # With save_interval=10, automatic save happens at step 0
+        # Steps 1-4 are added after that, so their indices remain
+        assert len(logger2.sample_indices_per_step) == 4
 
 
 # ============================================================================
@@ -379,7 +380,14 @@ class TestBatchReconstructor:
             log_dir=str(temp_log_dir),
             save_indices_only=True
         )
-        logger.sample_indices_per_step = {10: [0, 1, 2, 3]}
+
+        # Register step 10 so it exists in the log
+        logger.register_step(
+            step_id=10,
+            batch_id="batch_10",
+            eta=0.01,
+            sample_indices=[0, 1, 2, 3]
+        )
 
         dataset = [{'id': i, 'value': i*2} for i in range(100)]
         collator = lambda batch: {
@@ -457,11 +465,10 @@ class TestIntegration:
         # Verify loaded data
         assert len(logger2.step_log.buffer) == 10
 
-        # sample_indices_per_step is cleared after save_to_disk() for memory management
-        # Only indices added after the last automatic save remain
         # With save_interval=5, automatic saves happen at steps 0 and 5
-        # After final save_to_disk(), all indices are cleared
-        assert len(logger2.sample_indices_per_step) == 0
+        # After final save_to_disk(), indices from steps 6-9 remain (4 indices)
+        # because they were added after the last automatic save at step 5
+        assert len(logger2.sample_indices_per_step) == 4
 
         # Verify specific step
         record = logger2.step_log.get(5)

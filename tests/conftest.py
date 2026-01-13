@@ -2,10 +2,15 @@
 Shared test fixtures for LMCleaner tests.
 """
 
+import sys
+from pathlib import Path
+
+# Add src to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
 import pytest
 import torch
 import torch.nn as nn
-from pathlib import Path
 import tempfile
 
 
