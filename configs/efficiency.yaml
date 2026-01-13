@@ -1,0 +1,5 @@
+# Efficiency tracking configuration
+# Add this to trainer.args in your experiment config to enable efficiency tracking
+
+efficiency_tracking:
+  enabled: true  # Set to true to enable efficiency metrics tracking

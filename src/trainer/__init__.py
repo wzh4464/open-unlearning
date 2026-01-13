@@ -5,7 +5,7 @@ from transformers import Trainer, TrainingArguments
 
 from trainer.base import FinetuneTrainer
 from trainer.training_logger import TrainingLogger
-from trainer.utils import CudaCacheCallback
+from trainer.utils import CudaCacheCallback, EfficiencyTracker
 from trainer.unlearn.grad_ascent import GradAscent
 from trainer.unlearn.grad_diff import GradDiff
 from trainer.unlearn.npo import NPO
@@ -38,6 +38,9 @@ def load_trainer_args(trainer_args: DictConfig, dataset):
 
     # Remove training_logger config as it's not a TrainingArguments parameter
     trainer_args.pop("training_logger", None)
+
+    # Remove efficiency_tracking config as it's not a TrainingArguments parameter
+    trainer_args.pop("efficiency_tracking", None)
 
     if warmup_epochs:
         batch_size = trainer_args["per_device_train_batch_size"]
@@ -109,6 +112,25 @@ def load_trainer(
 
     # Initialize callbacks list with CudaCacheCallback for memory optimization
     callbacks = [CudaCacheCallback(interval=10)]
+
+    # Initialize EfficiencyTracker if configured
+    efficiency_cfg = trainer_cfg.args.get("efficiency_tracking", None)
+    if efficiency_cfg and efficiency_cfg.get("enabled", False):
+        # Only initialize on main process to avoid multi-rank file writes
+        is_main_process = True
+        try:
+            import torch.distributed as dist
+            if dist.is_available() and dist.is_initialized():
+                is_main_process = dist.get_rank() == 0
+        except Exception:
+            is_main_process = True
+
+        if is_main_process:
+            logger.info("Initializing EfficiencyTracker on main process...")
+            callbacks.append(EfficiencyTracker(output_dir=trainer_args.output_dir))
+            logger.info(f"EfficiencyTracker enabled, metrics will be saved to {trainer_args.output_dir}")
+        else:
+            logger.info("Skipping EfficiencyTracker initialization on non-main process (distributed training)")
 
     trainer = trainer_cls(
         model=model,
