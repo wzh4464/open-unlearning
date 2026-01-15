@@ -252,7 +252,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
 
         logger.info(f"Saved {len(self.audit_records)} audit records to {audit_file}")
 
-    def compute_loss(self, model, inputs, return_outputs=False):
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
         """
         重写损失计算
 
