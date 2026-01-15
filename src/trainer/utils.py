@@ -348,6 +348,25 @@ class EfficiencyTracker(TrainerCallback):
 
         return forget_count, retain_count
 
+    def _estimate_flops(self, model, num_tokens: int) -> float:
+        """Estimate FLOPs for transformer training.
+
+        Uses the approximation: FLOPs ≈ 6 * P * T
+        where P = number of parameters, T = number of tokens.
+
+        This accounts for:
+        - Forward pass: ~2PT (matrix multiplications)
+        - Backward pass: ~4PT (gradients for weights and activations)
+
+        Reference: Kaplan et al. "Scaling Laws for Neural Language Models"
+        """
+        if model is None or num_tokens <= 0:
+            return 0.0
+
+        num_params = sum(p.numel() for p in model.parameters())
+        # 6 * P * T approximation for training FLOPs
+        return 6.0 * num_params * num_tokens
+
     def on_train_begin(self, args, state, control, model=None, **kwargs):
         """Called at the beginning of unlearning training"""
         self.start_time = time.time()
@@ -444,9 +463,10 @@ class EfficiencyTracker(TrainerCallback):
 
         # Estimate tokens processed during unlearning
         tokens_per_sec = 0
+        num_tokens = 0
         if hasattr(state, 'num_input_tokens_seen') and state.num_input_tokens_seen > 0:
-            tokens_per_sec = (state.num_input_tokens_seen / unlearning_time
-                             if unlearning_time > 0 else 0)
+            num_tokens = state.num_input_tokens_seen
+            tokens_per_sec = num_tokens / unlearning_time if unlearning_time > 0 else 0
 
         # Get model size
         model_size_mb = 0
@@ -454,6 +474,9 @@ class EfficiencyTracker(TrainerCallback):
             model_size_mb = sum(
                 p.numel() * p.element_size() for p in model.parameters()
             ) / (1024 ** 2)
+
+        # Estimate FLOPs
+        flops = self._estimate_flops(model, num_tokens)
 
         # Determine if method requires retain set (check trainer type)
         requires_retain_set = False
@@ -494,7 +517,7 @@ class EfficiencyTracker(TrainerCallback):
             total_steps=total_steps,
             forward_passes_total=self.forward_count,
             backward_passes_total=self.backward_count,
-            flops_estimate=0.0,  # Would require additional profiling
+            flops_estimate=flops,
             forget_samples_count=self.forget_samples,
             retain_samples_count=self.retain_samples,
             requires_retain_set=requires_retain_set,
@@ -511,6 +534,16 @@ class EfficiencyTracker(TrainerCallback):
         if self.output_dir:
             metrics.save(self.output_dir / "efficiency_metrics.json")
 
+        # Format FLOPs for display
+        if flops >= 1e15:
+            flops_str = f"{flops / 1e15:.2f} PFLOPs"
+        elif flops >= 1e12:
+            flops_str = f"{flops / 1e12:.2f} TFLOPs"
+        elif flops >= 1e9:
+            flops_str = f"{flops / 1e9:.2f} GFLOPs"
+        else:
+            flops_str = f"{flops:.2e}"
+
         # Log efficiency metrics via project logger
         logger.info(
             "\n%s\n"
@@ -521,6 +554,7 @@ class EfficiencyTracker(TrainerCallback):
             "  Intermediate Storage: %.2f MB\n"
             "  Tokens/Second: %.2f\n"
             "  Model Size: %.2f MB\n"
+            "  Estimated FLOPs: %s\n"
             "  Forward Passes: %d\n"
             "  Backward Passes: %d\n"
             "  Forget Samples: %d\n"
@@ -537,6 +571,7 @@ class EfficiencyTracker(TrainerCallback):
             self.peak_storage,
             tokens_per_sec,
             model_size_mb,
+            flops_str,
             self.forward_count,
             self.backward_count,
             self.forget_samples,
