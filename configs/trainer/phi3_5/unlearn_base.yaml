@@ -1,7 +1,7 @@
 defaults:
-  - finetune
+  - /trainer/finetune
 
-# Conservative defaults for unlearning methods to prevent catastrophic forgetting
+# Conservative defaults for Phi-3.5 to prevent catastrophic forgetting
 args:
   learning_rate: 5e-6
   num_train_epochs: 5

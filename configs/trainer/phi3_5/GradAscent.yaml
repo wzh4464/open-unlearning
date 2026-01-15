@@ -1,0 +1,8 @@
+defaults:
+  - unlearn_base
+
+handler: GradAscent
+
+args:
+  learning_rate: 1e-6
+  num_train_epochs: 3
