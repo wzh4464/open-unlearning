@@ -232,10 +232,14 @@ class EfficiencyTracker(TrainerCallback):
     """
 
     def __init__(self, output_dir: str = None, storage_dirs: list = None,
-                 gpu_sampling_interval: int = 10):
+                 gpu_sampling_interval: int = 10, storage_check_interval: int = 10):
         self.output_dir = Path(output_dir) if output_dir else None
-        self.storage_dirs = storage_dirs or []  # Directories to monitor for intermediate storage
+        # Normalize storage_dirs to Path objects once at init
+        self.storage_dirs = [
+            Path(d) if isinstance(d, str) else d for d in (storage_dirs or [])
+        ]
         self.gpu_sampling_interval = gpu_sampling_interval
+        self.storage_check_interval = storage_check_interval
 
         # Time tracking
         self.start_time = None
@@ -245,6 +249,8 @@ class EfficiencyTracker(TrainerCallback):
         # Memory tracking
         self.peak_memory = 0.0
         self.peak_storage = 0.0  # Peak intermediate storage in MB
+        self._last_storage_check_step = None
+        self._last_storage_value = 0.0
 
         # Pass counting
         self.forward_count = 0
@@ -308,19 +314,19 @@ class EfficiencyTracker(TrainerCallback):
         if not path.exists():
             return 0.0
         total = 0
-        try:
-            for f in path.rglob('*'):
-                if f.is_file():
+        for f in path.rglob('*'):
+            if f.is_file():
+                try:
                     total += f.stat().st_size
-        except (PermissionError, OSError):
-            pass
+                except (PermissionError, OSError):
+                    # Ignore files that can't be accessed, continue scanning others
+                    continue
         return total / (1024 ** 2)
 
     def _get_intermediate_storage(self) -> float:
         """Calculate total intermediate storage across monitored directories"""
         total = 0.0
-        for dir_path in self.storage_dirs:
-            path = Path(dir_path) if isinstance(dir_path, str) else dir_path
+        for path in self.storage_dirs:
             total += self._get_dir_size_mb(path)
         return total
 
@@ -385,9 +391,17 @@ class EfficiencyTracker(TrainerCallback):
             current_memory = torch.cuda.max_memory_allocated() / (1024 ** 2)
             self.peak_memory = max(self.peak_memory, current_memory)
 
-        # Track peak intermediate storage
-        current_storage = self._get_intermediate_storage()
-        self.peak_storage = max(self.peak_storage, current_storage)
+        # Track peak intermediate storage (throttled to avoid overhead)
+        if self.storage_dirs:
+            current_step = getattr(state, 'global_step', 0)
+            should_check = (
+                self._last_storage_check_step is None or
+                (current_step - self._last_storage_check_step) >= self.storage_check_interval
+            )
+            if should_check:
+                self._last_storage_value = self._get_intermediate_storage()
+                self._last_storage_check_step = current_step
+            self.peak_storage = max(self.peak_storage, self._last_storage_value)
 
         # Sample GPU utilization periodically
         if (self._nvml_initialized and

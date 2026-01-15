@@ -151,13 +151,21 @@ class TestEfficiencyTracker:
             assert tracker.backward_count == 0
 
     def test_initialization_with_storage_dirs(self):
-        """Test initialization with storage directories"""
+        """Test initialization with storage directories (normalized to Path)"""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage_dir = Path(tmpdir) / "gradients"
             storage_dir.mkdir()
             tracker = EfficiencyTracker(output_dir=tmpdir, storage_dirs=[str(storage_dir)])
 
-            assert tracker.storage_dirs == [str(storage_dir)]
+            # Should be normalized to Path objects
+            assert len(tracker.storage_dirs) == 1
+            assert isinstance(tracker.storage_dirs[0], Path)
+            assert tracker.storage_dirs[0] == storage_dir
+
+    def test_initialization_with_storage_check_interval(self):
+        """Test initialization with custom storage check interval"""
+        tracker = EfficiencyTracker(storage_check_interval=50)
+        assert tracker.storage_check_interval == 50
 
     def test_initialization_with_gpu_sampling_interval(self):
         """Test initialization with custom GPU sampling interval"""
@@ -227,26 +235,44 @@ class TestIntermediateStorageTracking:
             storage = tracker._get_intermediate_storage()
             assert 0.9 < storage < 1.1  # ~1 MB
 
-    def test_peak_storage_updated_on_step(self):
-        """Test that peak storage is updated during on_step_end"""
+    def test_storage_check_throttling(self):
+        """Test that storage checks are throttled by storage_check_interval"""
         with tempfile.TemporaryDirectory() as tmpdir:
             storage_dir = Path(tmpdir) / "checkpoints"
             storage_dir.mkdir()
 
-            tracker = EfficiencyTracker(output_dir=tmpdir, storage_dirs=[str(storage_dir)])
-            tracker.last_step_time = time.time()  # Initialize for latency tracking
+            # Set interval to 5 steps
+            tracker = EfficiencyTracker(
+                output_dir=tmpdir,
+                storage_dirs=[str(storage_dir)],
+                storage_check_interval=5
+            )
+            tracker.last_step_time = time.time()
 
-            # Mock state and args
             class MockState:
-                global_step = 1
+                global_step = 0
             class MockArgs:
                 pass
 
-            # Add file and call on_step_end
-            (storage_dir / "ckpt.pt").write_bytes(b"x" * 2 * 1024 * 1024)  # 2 MB
-            tracker.on_step_end(MockArgs(), MockState(), None)
+            # Add file
+            (storage_dir / "ckpt.pt").write_bytes(b"x" * 1024 * 1024)  # 1 MB
 
-            assert 1.9 < tracker.peak_storage < 2.1  # ~2 MB
+            # Step 0 - should check (first step)
+            MockState.global_step = 0
+            tracker.on_step_end(MockArgs(), MockState(), None)
+            assert tracker._last_storage_check_step == 0
+            assert 0.9 < tracker.peak_storage < 1.1
+
+            # Step 2 - should NOT check (interval not reached)
+            MockState.global_step = 2
+            old_check_step = tracker._last_storage_check_step
+            tracker.on_step_end(MockArgs(), MockState(), None)
+            assert tracker._last_storage_check_step == old_check_step  # unchanged
+
+            # Step 5 - should check (interval reached)
+            MockState.global_step = 5
+            tracker.on_step_end(MockArgs(), MockState(), None)
+            assert tracker._last_storage_check_step == 5
 
 
 class TestLatencyTracking:
