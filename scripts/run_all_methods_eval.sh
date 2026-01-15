@@ -23,6 +23,9 @@ SKIP_METHODS=(
     # "GradDiff"
     # "NPO"
 )
+SKIP_UNLEARN=(  # Skip only unlearn phase, still run eval
+    "GradDiff"
+)
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:64
 export HF_HUB_DISABLE_TELEMETRY=1
@@ -119,6 +122,17 @@ should_skip_method() {
     return 1
 }
 
+# Helper function to check if unlearn phase should be skipped
+should_skip_unlearn() {
+    local method="$1"
+    for skip in "${SKIP_UNLEARN[@]}"; do
+        if [ "$skip" == "$method" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 # ============================================
 # Step 2: Run each unlearning method
 # ============================================
@@ -142,54 +156,59 @@ for METHOD in "${METHODS[@]}"; do
         continue
     fi
 
-    # Run unlearning with efficiency tracking
-    echo "Running unlearning with efficiency tracking..."
-
-    if [ "$METHOD" == "LMCleanerBatch" ] || [ "$METHOD" == "LMCleanerSample" ]; then
-        # LMCleaner needs training_log_dir
-        run_with_log "${TASK_NAME}_unlearn" \
-            uv run accelerate launch \
-            --config_file configs/accelerate/default_config.yaml \
-            --main_process_port $MASTER_PORT \
-            src/train.py --config-name=unlearn.yaml \
-            experiment=unlearn/tofu/default \
-            trainer=${METHOD} \
-            model=${MODEL} \
-            model.model_args.pretrained_model_name_or_path=${FINETUNED_MODEL} \
-            model.tokenizer_args.pretrained_model_name_or_path=${FINETUNED_MODEL} \
-            forget_split=${FORGET_SPLIT} \
-            retain_split=${RETAIN_SPLIT} \
-            trainer.method_args.training_log_dir=${TRAINING_LOG_DIR} \
-            trainer.args.per_device_train_batch_size=2 \
-            trainer.args.gradient_accumulation_steps=4 \
-            trainer.args.gradient_checkpointing=true \
-            ++trainer.args.bf16=true \
-            +efficiency.enabled=true \
-            task_name=${TASK_NAME}
+    # Check if unlearn phase should be skipped
+    if should_skip_unlearn "$METHOD"; then
+        echo "Skipping unlearn phase for $METHOD (in SKIP_UNLEARN)"
     else
-        # Standard unlearning methods
-        run_with_log "${TASK_NAME}_unlearn" \
-            uv run accelerate launch \
-            --config_file configs/accelerate/default_config.yaml \
-            --main_process_port $MASTER_PORT \
-            src/train.py --config-name=unlearn.yaml \
-            experiment=unlearn/tofu/default \
-            trainer=${METHOD} \
-            model=${MODEL} \
-            model.model_args.pretrained_model_name_or_path=${FINETUNED_MODEL} \
-            model.tokenizer_args.pretrained_model_name_or_path=${FINETUNED_MODEL} \
-            forget_split=${FORGET_SPLIT} \
-            retain_split=${RETAIN_SPLIT} \
-            trainer.args.per_device_train_batch_size=2 \
-            trainer.args.gradient_accumulation_steps=4 \
-            trainer.args.gradient_checkpointing=true \
-            ++trainer.args.bf16=true \
-            +efficiency.enabled=true \
-            task_name=${TASK_NAME}
-    fi
+        # Run unlearning with efficiency tracking
+        echo "Running unlearning with efficiency tracking..."
 
-    # Update port for next run
-    export MASTER_PORT=$(uv run python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+        if [ "$METHOD" == "LMCleanerBatch" ] || [ "$METHOD" == "LMCleanerSample" ]; then
+            # LMCleaner needs training_log_dir
+            run_with_log "${TASK_NAME}_unlearn" \
+                uv run accelerate launch \
+                --config_file configs/accelerate/default_config.yaml \
+                --main_process_port $MASTER_PORT \
+                src/train.py --config-name=unlearn.yaml \
+                experiment=unlearn/tofu/default \
+                trainer=${METHOD} \
+                model=${MODEL} \
+                model.model_args.pretrained_model_name_or_path=${FINETUNED_MODEL} \
+                model.tokenizer_args.pretrained_model_name_or_path=${FINETUNED_MODEL} \
+                forget_split=${FORGET_SPLIT} \
+                retain_split=${RETAIN_SPLIT} \
+                trainer.method_args.training_log_dir=${TRAINING_LOG_DIR} \
+                trainer.args.per_device_train_batch_size=2 \
+                trainer.args.gradient_accumulation_steps=4 \
+                trainer.args.gradient_checkpointing=true \
+                ++trainer.args.bf16=true \
+                +efficiency.enabled=true \
+                task_name=${TASK_NAME}
+        else
+            # Standard unlearning methods
+            run_with_log "${TASK_NAME}_unlearn" \
+                uv run accelerate launch \
+                --config_file configs/accelerate/default_config.yaml \
+                --main_process_port $MASTER_PORT \
+                src/train.py --config-name=unlearn.yaml \
+                experiment=unlearn/tofu/default \
+                trainer=${METHOD} \
+                model=${MODEL} \
+                model.model_args.pretrained_model_name_or_path=${FINETUNED_MODEL} \
+                model.tokenizer_args.pretrained_model_name_or_path=${FINETUNED_MODEL} \
+                forget_split=${FORGET_SPLIT} \
+                retain_split=${RETAIN_SPLIT} \
+                trainer.args.per_device_train_batch_size=2 \
+                trainer.args.gradient_accumulation_steps=4 \
+                trainer.args.gradient_checkpointing=true \
+                ++trainer.args.bf16=true \
+                +efficiency.enabled=true \
+                task_name=${TASK_NAME}
+        fi
+
+        # Update port for next run
+        export MASTER_PORT=$(uv run python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+    fi
 
     # Run evaluation with ALL metrics (including MIA)
     echo "Running full evaluation (including MIA)..."
