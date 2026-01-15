@@ -1,0 +1,9 @@
+defaults:
+  - finetune
+
+# Conservative defaults for unlearning methods to prevent catastrophic forgetting
+args:
+  learning_rate: 5e-6
+  num_train_epochs: 5
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.1
