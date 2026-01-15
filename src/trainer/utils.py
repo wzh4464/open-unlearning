@@ -213,7 +213,6 @@ class EfficiencyMetrics:
 
     # I/O metrics
     checkpoint_save_time_seconds: float = 0.0
-    data_loading_time_seconds: float = 0.0
 
     def to_dict(self):
         return asdict(self)
@@ -270,9 +269,6 @@ class EfficiencyTracker(TrainerCallback):
         # Checkpoint timing
         self.checkpoint_save_times = []
         self._checkpoint_start_time = None
-
-        # Data loading timing
-        self.data_loading_time = 0.0
 
         # Try to initialize NVML for GPU utilization tracking
         self._try_init_nvml()
@@ -404,11 +400,12 @@ class EfficiencyTracker(TrainerCallback):
             self.peak_storage = max(self.peak_storage, self._last_storage_value)
 
         # Sample GPU utilization periodically
-        if (self._nvml_initialized and
-                state.global_step % self.gpu_sampling_interval == 0):
-            util = self._get_gpu_utilization()
-            if util > 0:
-                self.gpu_utilizations.append(util)
+        if self._nvml_initialized:
+            current_step = getattr(state, 'global_step', 0)
+            if current_step % self.gpu_sampling_interval == 0:
+                util = self._get_gpu_utilization()
+                if util > 0:
+                    self.gpu_utilizations.append(util)
 
     def on_save(self, args, state, control, **kwargs):
         """Track checkpoint save time"""
@@ -439,8 +436,8 @@ class EfficiencyTracker(TrainerCallback):
             try:
                 import pynvml
                 pynvml.nvmlShutdown()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to shut down NVML: %s", e)
 
         # Use state.global_step for accurate step count
         total_steps = state.global_step if hasattr(state, 'global_step') else 0
@@ -508,7 +505,6 @@ class EfficiencyTracker(TrainerCallback):
             per_step_latency_min_ms=latency_min,
             per_step_latency_max_ms=latency_max,
             checkpoint_save_time_seconds=checkpoint_time,
-            data_loading_time_seconds=self.data_loading_time,
         )
 
         # Save metrics

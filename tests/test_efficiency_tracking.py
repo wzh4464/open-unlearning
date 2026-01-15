@@ -41,7 +41,6 @@ class TestEfficiencyMetrics:
             per_step_latency_min_ms=100.0,
             per_step_latency_max_ms=250.0,
             checkpoint_save_time_seconds=5.5,
-            data_loading_time_seconds=2.0,
         )
 
         assert metrics.unlearning_time_seconds == 100.5
@@ -63,7 +62,6 @@ class TestEfficiencyMetrics:
         assert metrics.per_step_latency_min_ms == 100.0
         assert metrics.per_step_latency_max_ms == 250.0
         assert metrics.checkpoint_save_time_seconds == 5.5
-        assert metrics.data_loading_time_seconds == 2.0
 
     def test_to_dict(self):
         """Test conversion to dictionary includes all fields"""
@@ -94,7 +92,7 @@ class TestEfficiencyMetrics:
             'gpu_utilization_mean', 'gpu_utilization_max',
             'per_step_latency_mean_ms', 'per_step_latency_std_ms',
             'per_step_latency_min_ms', 'per_step_latency_max_ms',
-            'checkpoint_save_time_seconds', 'data_loading_time_seconds',
+            'checkpoint_save_time_seconds',
         ]
         for key in expected_keys:
             assert key in metrics_dict, f"Missing key: {key}"
