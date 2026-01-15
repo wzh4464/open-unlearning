@@ -337,6 +337,39 @@ class TestPassCounting:
         assert tracker.backward_count == 1
 
 
+class TestFLOPsEstimation:
+    """Test FLOPs estimation"""
+
+    def test_flops_estimation_formula(self):
+        """Test FLOPs estimation uses 6*P*T formula"""
+        tracker = EfficiencyTracker()
+
+        # Create a simple mock model with known parameter count
+        import torch.nn as nn
+        model = nn.Linear(100, 100)  # 100*100 + 100 = 10100 params
+
+        num_params = sum(p.numel() for p in model.parameters())
+        num_tokens = 1000
+
+        flops = tracker._estimate_flops(model, num_tokens)
+
+        # FLOPs should be 6 * params * tokens
+        expected = 6.0 * num_params * num_tokens
+        assert flops == expected
+
+    def test_flops_estimation_no_model(self):
+        """Test FLOPs estimation returns 0 when model is None"""
+        tracker = EfficiencyTracker()
+        assert tracker._estimate_flops(None, 1000) == 0.0
+
+    def test_flops_estimation_no_tokens(self):
+        """Test FLOPs estimation returns 0 when tokens is 0"""
+        import torch.nn as nn
+        tracker = EfficiencyTracker()
+        model = nn.Linear(10, 10)
+        assert tracker._estimate_flops(model, 0) == 0.0
+
+
 class TestSampleCounting:
     """Test forget/retain sample counting"""
 
