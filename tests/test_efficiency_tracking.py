@@ -4,14 +4,10 @@ Run with: pytest tests/test_efficiency_tracking.py
 """
 
 import pytest
-from pathlib import Path
 import tempfile
-import sys
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from trainer.utils import EfficiencyTracker, EfficiencyMetrics
 
@@ -510,6 +506,7 @@ class TestCompareScript:
 
     def test_script_imports(self):
         """Test that compare script can be imported"""
+        import sys
         sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
         try:

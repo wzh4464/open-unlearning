@@ -34,10 +34,9 @@ class MinKPlusPlusAttack(MinKProbAttack):
 
         # Handle numerical stability
         sigma = torch.clamp(sigma, min=1e-6)
-        scores = (
-            target_prob.cpu().numpy() - mu.cpu().numpy()
-        ) / torch.sqrt(sigma).cpu().numpy()
+        scores = (target_prob - mu) / torch.sqrt(sigma)
 
         # Take bottom k% as the attack score
-        num_k = max(1, int(len(scores) * self.k))
-        return -np.mean(sorted(scores)[:num_k])
+        scores_np = scores.cpu().numpy()
+        num_k = max(1, int(len(scores_np) * self.k))
+        return -np.mean(sorted(scores_np)[:num_k])

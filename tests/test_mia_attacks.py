@@ -6,11 +6,6 @@ Run with: pytest tests/test_mia_attacks.py -v
 import pytest
 import torch
 import numpy as np
-from pathlib import Path
-import sys
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from evals.metrics.mia.min_k import MinKProbAttack
 from evals.metrics.mia.min_k_plus_plus import MinKPlusPlusAttack
