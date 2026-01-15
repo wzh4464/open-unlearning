@@ -22,6 +22,10 @@ class MinKPlusPlusAttack(MinKProbAttack):
         if len(target_prob) == 0:
             return 0
 
+        # Convert all tensors to float32 for consistent computation
+        all_probs = all_probs.float()
+        target_prob = target_prob.float()
+
         # Compute normalized scores using vocab distribution
         mu = (torch.exp(all_probs) * all_probs).sum(-1)
         sigma = (torch.exp(all_probs) * torch.square(all_probs)).sum(-1) - torch.square(
@@ -31,8 +35,8 @@ class MinKPlusPlusAttack(MinKProbAttack):
         # Handle numerical stability
         sigma = torch.clamp(sigma, min=1e-6)
         scores = (
-            target_prob.float().cpu().numpy() - mu.float().cpu().numpy()
-        ) / torch.sqrt(sigma).float().cpu().numpy()
+            target_prob.cpu().numpy() - mu.cpu().numpy()
+        ) / torch.sqrt(sigma).cpu().numpy()
 
         # Take bottom k% as the attack score
         num_k = max(1, int(len(scores) * self.k))

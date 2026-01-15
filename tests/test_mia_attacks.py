@@ -68,7 +68,7 @@ class TestMinKProbAttack:
         score = attack.compute_score(log_probs)
 
         assert is_numeric(score)
-        assert abs(score - 2.5) < 1e-5  # -(-2.5) = 2.5
+        assert score == pytest.approx(2.5)  # -(-2.5) = 2.5
 
 
 class TestMinKPlusPlusAttack:
