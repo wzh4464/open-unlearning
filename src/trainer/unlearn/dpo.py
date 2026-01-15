@@ -10,8 +10,14 @@ class DPO(GradDiff):
             self.ref_model = self._prepare_ref_model(self.model)
 
     def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        forget_inputs = inputs["forget"]["original"]
-        alternate_inputs = inputs["forget"]["alternate"]
+        forget_data = inputs["forget"]
+        if "original" not in forget_data or "alternate" not in forget_data:
+            raise ValueError(
+                "DPO requires 'original' and 'alternate' keys in forget data. "
+                "Use experiment=unlearn/tofu/idk (with TOFU_QA_forget_idk dataset) instead of default."
+            )
+        forget_inputs = forget_data["original"]
+        alternate_inputs = forget_data["alternate"]
 
         forget_loss, forget_outputs = compute_dpo_loss(
             model=model,
