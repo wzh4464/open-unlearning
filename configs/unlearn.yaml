@@ -10,8 +10,10 @@ defaults:
   - _self_
 
 trainer:
-  args: 
+  args:
     remove_unused_columns: False
+    efficiency_tracking:
+      enabled: true
 
 mode: unlearn
 task_name: ???
