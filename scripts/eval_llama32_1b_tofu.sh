@@ -3,6 +3,7 @@
 # Uses the official open-unlearning finetuned model
 
 set -e
+source "$(dirname "$0")/env.sh"
 
 # Default values
 FORGET_SPLIT=${FORGET_SPLIT:-"forget10"}
@@ -16,7 +17,7 @@ echo "Forget split: ${FORGET_SPLIT}"
 echo "Holdout split: ${HOLDOUT_SPLIT}"
 echo "Task name: ${TASK_NAME}"
 
-uv run python src/eval.py --config-name=eval.yaml \
+$PYTHON_CMD src/eval.py --config-name=eval.yaml \
     experiment=eval/tofu/default \
     model=Llama-3.2-1B-Instruct \
     model.model_args.pretrained_model_name_or_path="${MODEL_PATH}" \

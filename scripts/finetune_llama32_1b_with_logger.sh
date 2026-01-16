@@ -3,6 +3,7 @@
 # Uses the official open-unlearning finetuned model as base
 
 set -e
+source "$(dirname "$0")/env.sh"
 
 # Default values
 FORGET_SPLIT=${FORGET_SPLIT:-"forget10"}
@@ -18,7 +19,7 @@ echo "Retain split: ${RETAIN_SPLIT}"
 echo "Task name: ${TASK_NAME}"
 echo "Log dir: ${LOG_DIR}"
 
-uv run python src/train.py --config-name=unlearn.yaml \
+$PYTHON_CMD src/train.py --config-name=unlearn.yaml \
     experiment=unlearn/tofu/default \
     model=Llama-3.2-1B-Instruct \
     model.model_args.pretrained_model_name_or_path="${MODEL_PATH}" \

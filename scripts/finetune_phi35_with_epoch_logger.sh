@@ -14,6 +14,7 @@
 #   GRAD_ACCUM: Gradient accumulation steps (default: 4)
 
 set -e
+source "$(dirname "$0")/env.sh"
 
 # Default values
 NUM_EPOCHS=${NUM_EPOCHS:-5}
@@ -44,7 +45,7 @@ echo "Total steps: $((STEPS_PER_EPOCH * NUM_EPOCHS))"
 echo ""
 
 # Run finetuning with epoch-aware logging
-uv run python src/train.py --config-name=train.yaml \
+$PYTHON_CMD src/train.py --config-name=train.yaml \
     experiment=finetune/tofu/default \
     model=Phi-3.5-mini-instruct \
     trainer.args.num_train_epochs=${NUM_EPOCHS} \

@@ -3,6 +3,7 @@
 # Usage: bash scripts/benchmark_efficiency.sh
 
 set -e
+source "$(dirname "$0")/env.sh"
 
 echo "==================================="
 echo "Efficiency Benchmarking Script"
@@ -28,7 +29,7 @@ for method in "${METHODS[@]}"; do
 
     TASK_NAME="efficiency_${method}_${FORGET_SPLIT}"
 
-    uv run python src/train.py \
+    $PYTHON_CMD src/train.py \
         --config-name=unlearn.yaml \
         experiment=unlearn/tofu/default \
         model=$MODEL \
@@ -54,4 +55,4 @@ echo "To view efficiency metrics:"
 echo "  cat saves/unlearn/efficiency_*/efficiency_metrics.json"
 echo ""
 echo "To compare all results:"
-echo "  uv run python scripts/compare_efficiency.py"
+echo "  $PYTHON_CMD scripts/compare_efficiency.py"

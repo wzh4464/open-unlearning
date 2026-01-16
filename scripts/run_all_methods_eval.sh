@@ -5,6 +5,7 @@
 
 set -e
 set -o pipefail
+source "$(dirname "$0")/env.sh"
 
 # ============================================
 # Configuration
@@ -29,7 +30,7 @@ SKIP_UNLEARN=(  # Skip only unlearn phase, still run eval
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:64
 export HF_HUB_DISABLE_TELEMETRY=1
-export MASTER_PORT=$(uv run python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+export MASTER_PORT=$($PYTHON_CMD -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
 
 # All unlearning methods
 METHODS=(
@@ -97,7 +98,7 @@ else
     TASK_NAME="phi35_finetuned_eval"
 
     run_with_log "${TASK_NAME}" \
-        uv run python src/eval.py --config-name=eval.yaml \
+        $PYTHON_CMD src/eval.py --config-name=eval.yaml \
         experiment=eval/tofu/default \
         eval=tofu_full \
         model=${MODEL} \
@@ -166,7 +167,7 @@ for METHOD in "${METHODS[@]}"; do
         if [ "$METHOD" == "LMCleanerBatch" ] || [ "$METHOD" == "LMCleanerSample" ]; then
             # LMCleaner needs training_log_dir
             run_with_log "${TASK_NAME}_unlearn" \
-                uv run accelerate launch \
+                $ACCELERATE_CMD launch \
                 --config_file configs/accelerate/default_config.yaml \
                 --main_process_port $MASTER_PORT \
                 src/train.py --config-name=unlearn.yaml \
@@ -187,7 +188,7 @@ for METHOD in "${METHODS[@]}"; do
         else
             # Standard unlearning methods
             run_with_log "${TASK_NAME}_unlearn" \
-                uv run accelerate launch \
+                $ACCELERATE_CMD launch \
                 --config_file configs/accelerate/default_config.yaml \
                 --main_process_port $MASTER_PORT \
                 src/train.py --config-name=unlearn.yaml \
@@ -207,13 +208,13 @@ for METHOD in "${METHODS[@]}"; do
         fi
 
         # Update port for next run
-        export MASTER_PORT=$(uv run python -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
+        export MASTER_PORT=$($PYTHON_CMD -c "import socket; s=socket.socket(); s.bind(('', 0)); print(s.getsockname()[1]); s.close()")
     fi
 
     # Run evaluation with ALL metrics (including MIA)
     echo "Running full evaluation (including MIA)..."
     run_with_log "${TASK_NAME}_eval" \
-        uv run python src/eval.py --config-name=eval.yaml \
+        $PYTHON_CMD src/eval.py --config-name=eval.yaml \
         experiment=eval/tofu/default \
         eval=tofu_full \
         model=${MODEL} \

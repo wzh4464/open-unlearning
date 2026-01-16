@@ -32,6 +32,7 @@ COPY . .
 # Make venv the default Python
 ENV PATH="/app/.venv/bin:$PATH"
 ENV VIRTUAL_ENV="/app/.venv"
+ENV IN_DOCKER=1
 
 # Entrypoint
 COPY scripts/docker-entrypoint.sh /entrypoint.sh
