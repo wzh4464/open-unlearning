@@ -1,5 +1,5 @@
 defaults:
-  - finetune
+  - unlearn_base
 
 handler: GradDiff
 
