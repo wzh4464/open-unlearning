@@ -280,8 +280,9 @@ class TestSaveLoad:
         # Save to disk
         logger.save_to_disk()
 
-        # Check files exist - actual filename is step_records_{step_id}.pkl
-        assert (temp_log_dir / f"step_records_{logger.current_step}.pkl").exists()
+        # Check files exist - incremental save uses chunk files
+        chunk_files = list(temp_log_dir.glob("step_records_chunk_*.pkl"))
+        assert len(chunk_files) > 0, "No chunk files found"
         assert (temp_log_dir / "meta.json").exists()
 
     def test_load_from_disk(self, temp_log_dir):

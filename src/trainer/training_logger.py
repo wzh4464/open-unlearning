@@ -25,7 +25,9 @@ TrainingLogger: 训练过程日志记录模块
 import json
 import logging
 import pickle
+import threading
 from pathlib import Path
+from queue import Queue
 from typing import Dict, Optional, Any, List
 import weakref
 
@@ -125,10 +127,51 @@ class TrainingLogger:
         # 上一步的参数(用于计算u[t])
         self.prev_params: Optional[List[torch.Tensor]] = None
 
+        # 增量保存: 跟踪已保存的最后一个 step_id
+        self._last_saved_step_id = -1
+
+        # 异步写入
+        self._write_queue: Queue = Queue()
+        self._writer_thread: Optional[threading.Thread] = None
+        self._stop_writer = threading.Event()
+        self._async_write = True  # 默认启用异步写入
+
         logger.info(f"TrainingLogger initialized: mode={mode}, max_steps={max_steps}, "
                    f"save_indices_only={save_indices_only}, save_rng_state={save_rng_state}, "
                    f"compute_diag_h={compute_diag_h}, steps_per_epoch={steps_per_epoch}, "
                    f"checkpoints_per_epoch={checkpoints_per_epoch}, save_at_epoch_end={save_at_epoch_end}")
+
+    def _writer_loop(self):
+        """后台写入线程的主循环"""
+        while not self._stop_writer.is_set():
+            try:
+                task = self._write_queue.get(timeout=0.5)
+                if task is None:  # 停止信号
+                    break
+                file_path, data = task
+                with open(file_path, 'wb') as f:
+                    pickle.dump(data, f)
+                self._write_queue.task_done()
+                logger.debug(f"Async write completed: {file_path}")
+            except Exception:
+                continue  # 超时或其他错误，继续检查停止标志
+
+    def start_async_writer(self):
+        """启动后台写入线程"""
+        if self._writer_thread is None or not self._writer_thread.is_alive():
+            self._stop_writer.clear()
+            self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
+            self._writer_thread.start()
+            logger.debug("Async writer thread started")
+
+    def stop_async_writer(self, wait: bool = True):
+        """停止后台写入线程"""
+        self._stop_writer.set()
+        if self._writer_thread is not None and self._writer_thread.is_alive():
+            self._write_queue.put(None)  # 发送停止信号
+            if wait:
+                self._writer_thread.join(timeout=30)
+            logger.debug("Async writer thread stopped")
 
     def _prune_old_entries(self):
         """
@@ -398,7 +441,7 @@ class TrainingLogger:
 
     def save_to_disk(self, step_id: Optional[int] = None):
         """
-        保存日志到磁盘
+        保存日志到磁盘（增量保存 + 异步写入）
 
         Args:
             step_id: 当前步骤ID(用于文件名)
@@ -406,7 +449,7 @@ class TrainingLogger:
         if step_id is None:
             step_id = self.current_step
 
-        # 保存元信息
+        # 保存元信息（包含增量保存标记）
         meta = {
             "max_steps": self.max_steps,
             "mode": self.mode,
@@ -422,6 +465,7 @@ class TrainingLogger:
             "save_at_epoch_end": self.save_at_epoch_end,
             "current_epoch": self.current_epoch,
             "epoch_end_steps": self.epoch_end_steps,
+            "incremental_save": True,  # 标记使用增量保存格式
         }
 
         meta_file = self.log_dir / "meta.json"
@@ -447,12 +491,17 @@ class TrainingLogger:
             with open(rng_file, 'wb') as f:
                 pickle.dump(self.rng_states_per_step, f)
 
-        # 保存步骤记录(使用pickle,因为包含张量)
-        records_file = self.log_dir / f"step_records_{step_id}.pkl"
+        # 增量保存: 只保存新增的记录
+        new_records = [rec for rec in self.step_log.buffer
+                       if rec.step_id > self._last_saved_step_id]
+
+        if not new_records:
+            logger.debug(f"No new records to save at step {step_id}")
+            return
 
         # 准备可序列化的记录
         serializable_records = []
-        for rec in self.step_log.buffer:
+        for rec in new_records:
             rec_dict = {
                 "step_id": rec.step_id,
                 "eta": rec.eta,
@@ -460,14 +509,30 @@ class TrainingLogger:
                 "u": rec.u.cpu() if rec.u is not None else None,
                 "gbar": rec.gbar.cpu() if rec.gbar is not None else None,
                 "diag_H": rec.diag_H.cpu() if rec.diag_H is not None else None,
-                # 不保存batch_data和theta_ref(太大且无法序列化)
             }
             serializable_records.append(rec_dict)
 
-        with open(records_file, 'wb') as f:
-            pickle.dump(serializable_records, f)
+        # 使用 chunk 文件名（增量保存）
+        chunk_file = self.log_dir / f"step_records_chunk_{step_id}.pkl"
 
-        logger.info(f"Saved training log at step {step_id} to {self.log_dir}")
+        # 异步写入或同步写入
+        if self._async_write:
+            self.start_async_writer()
+            self._write_queue.put((chunk_file, serializable_records))
+            logger.info(f"Queued {len(new_records)} records for async write at step {step_id}")
+        else:
+            with open(chunk_file, 'wb') as f:
+                pickle.dump(serializable_records, f)
+            logger.info(f"Saved {len(new_records)} records at step {step_id} to {self.log_dir}")
+
+        # 更新已保存的最后一个 step_id
+        self._last_saved_step_id = new_records[-1].step_id
+
+        # 保存后清除已保存记录的 tensor 以释放内存
+        for rec in new_records:
+            rec.u = None
+            rec.gbar = None
+            rec.diag_H = None
 
         # Clear dictionaries after saving to free memory (Fix #1)
         if self.save_indices_only and self.sample_indices_per_step:
@@ -534,27 +599,51 @@ class TrainingLogger:
             with open(rng_file, 'rb') as f:
                 self.rng_states_per_step = pickle.load(f)
 
-        # 加载步骤记录
-        records_file = self.log_dir / f"step_records_{step_id}.pkl"
-        if not records_file.exists():
-            logger.warning(f"Records file not found: {records_file}")
-            return
+        # 检查是否使用增量保存格式
+        is_incremental = meta.get("incremental_save", False)
 
-        with open(records_file, 'rb') as f:
-            serializable_records = pickle.load(f)
-
-        # 重建步骤记录
         self.step_log.clear()
-        for rec_dict in serializable_records:
-            record = StepRecord(
-                step_id=rec_dict["step_id"],
-                eta=rec_dict["eta"],
-                batch_id=rec_dict["batch_id"],
-                u=rec_dict["u"],
-                gbar=rec_dict["gbar"],
-                diag_H=rec_dict["diag_H"],
-            )
-            self.step_log.add(record)
+
+        if is_incremental:
+            # 增量保存格式: 加载所有 chunk 文件
+            chunk_files = sorted(self.log_dir.glob("step_records_chunk_*.pkl"))
+            if chunk_files:
+                for chunk_file in chunk_files:
+                    with open(chunk_file, 'rb') as f:
+                        chunk_records = pickle.load(f)
+                    for rec_dict in chunk_records:
+                        record = StepRecord(
+                            step_id=rec_dict["step_id"],
+                            eta=rec_dict["eta"],
+                            batch_id=rec_dict["batch_id"],
+                            u=rec_dict["u"],
+                            gbar=rec_dict["gbar"],
+                            diag_H=rec_dict.get("diag_H"),
+                        )
+                        self.step_log.add(record)
+                logger.info(f"Loaded {len(chunk_files)} chunk files from {self.log_dir}")
+            else:
+                logger.warning(f"No chunk files found in {self.log_dir}")
+        else:
+            # 旧格式: 加载单个 step_records 文件
+            records_file = self.log_dir / f"step_records_{step_id}.pkl"
+            if not records_file.exists():
+                logger.warning(f"Records file not found: {records_file}")
+                return
+
+            with open(records_file, 'rb') as f:
+                serializable_records = pickle.load(f)
+
+            for rec_dict in serializable_records:
+                record = StepRecord(
+                    step_id=rec_dict["step_id"],
+                    eta=rec_dict["eta"],
+                    batch_id=rec_dict["batch_id"],
+                    u=rec_dict["u"],
+                    gbar=rec_dict["gbar"],
+                    diag_H=rec_dict.get("diag_H"),
+                )
+                self.step_log.add(record)
 
         self.current_step = meta.get("current_step", 0)
 
@@ -562,6 +651,7 @@ class TrainingLogger:
 
     def clear(self):
         """清空日志"""
+        self.stop_async_writer()
         self.step_log.clear()
         self.batch_index.clear()
         self.sample_indices_per_step.clear()
@@ -570,6 +660,7 @@ class TrainingLogger:
         self.current_epoch = 0
         self.epoch_end_steps.clear()
         self.prev_params = None
+        self._last_saved_step_id = -1
 
 
 def reconstruct_batch_from_indices(
