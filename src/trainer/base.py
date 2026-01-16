@@ -30,7 +30,9 @@ class EpochEndCallback(TrainerCallback):
 
 
 class FinetuneTrainer(Trainer):
-    def __init__(self, evaluators=None, template_args=None, training_logger=None, *args, **kwargs):
+    def __init__(
+        self, evaluators=None, template_args=None, training_logger=None, *args, **kwargs
+    ):
         self.evaluators = evaluators
         self.template_args = template_args
         self.training_logger = training_logger
@@ -38,7 +40,11 @@ class FinetuneTrainer(Trainer):
         # Handle tokenizer -> processing_class parameter name change in transformers 5.0+
         # Suppress the FutureWarning until we upgrade to transformers 5.0+
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=FutureWarning, message=".*tokenizer.*deprecated.*processing_class.*")
+            warnings.filterwarnings(
+                "ignore",
+                category=FutureWarning,
+                message=".*tokenizer.*deprecated.*processing_class.*",
+            )
             super().__init__(*args, **kwargs)
 
         # Add epoch end callback if training_logger is enabled
@@ -93,9 +99,12 @@ class FinetuneTrainer(Trainer):
             if self.training_logger.prev_params is None:
                 try:
                     from trainer.unlearn.lmcleaner_core import clone_parameters
+
                     self.training_logger.prev_params = clone_parameters(model)
                 except Exception as e:
-                    logger.debug(f"Failed to clone initial parameters: {e}. This is expected with DeepSpeed ZeRO-3.")
+                    logger.debug(
+                        f"Failed to clone initial parameters: {e}. This is expected with DeepSpeed ZeRO-3."
+                    )
 
         # Perform the normal training step
         if num_items_in_batch is not None:
@@ -106,14 +115,22 @@ class FinetuneTrainer(Trainer):
         # Log the training step after optimization
         if self.training_logger is not None:
             step_id = self.state.global_step
-            eta = self.optimizer.param_groups[0]['lr']
+            eta = self.optimizer.param_groups[0]["lr"]
 
             # Get sample indices if available
             sample_indices = None
-            if 'idx' in inputs:
-                sample_indices = inputs['idx'].cpu().tolist() if torch.is_tensor(inputs['idx']) else inputs['idx']
-            elif 'index' in inputs:
-                sample_indices = inputs['index'].cpu().tolist() if torch.is_tensor(inputs['index']) else inputs['index']
+            if "idx" in inputs:
+                sample_indices = (
+                    inputs["idx"].cpu().tolist()
+                    if torch.is_tensor(inputs["idx"])
+                    else inputs["idx"]
+                )
+            elif "index" in inputs:
+                sample_indices = (
+                    inputs["index"].cpu().tolist()
+                    if torch.is_tensor(inputs["index"])
+                    else inputs["index"]
+                )
 
             # Prepare batch data for logging (optional, based on configuration)
             batch_data = None
@@ -129,7 +146,7 @@ class FinetuneTrainer(Trainer):
                 # Compute diagonal Hessian approximation (using gradient squared as approximation)
                 # This is a simplified version - can be enhanced with proper Hessian computation
                 try:
-                    if hasattr(model, 'named_parameters'):
+                    if hasattr(model, "named_parameters"):
                         valid_grads = [
                             p.grad.detach().pow(2).view(-1)
                             for p in model.parameters()

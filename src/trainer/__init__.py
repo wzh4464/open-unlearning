@@ -87,6 +87,7 @@ def load_trainer(
         is_main_process = True
         try:
             import torch.distributed as dist
+
             if dist.is_available() and dist.is_initialized():
                 is_main_process = dist.get_rank() == 0
         except Exception:
@@ -108,7 +109,9 @@ def load_trainer(
             )
             logger.info(f"TrainingLogger initialized: {training_logger.log_dir}")
         else:
-            logger.info("Skipping TrainingLogger initialization on non-main process (distributed training)")
+            logger.info(
+                "Skipping TrainingLogger initialization on non-main process (distributed training)"
+            )
 
     # Initialize callbacks list with CudaCacheCallback for memory optimization
     callbacks = [CudaCacheCallback(interval=10)]
@@ -120,6 +123,7 @@ def load_trainer(
         is_main_process = True
         try:
             import torch.distributed as dist
+
             if dist.is_available() and dist.is_initialized():
                 is_main_process = dist.get_rank() == 0
         except Exception:
@@ -128,9 +132,13 @@ def load_trainer(
         if is_main_process:
             logger.info("Initializing EfficiencyTracker on main process...")
             callbacks.append(EfficiencyTracker(output_dir=trainer_args.output_dir))
-            logger.info(f"EfficiencyTracker enabled, metrics will be saved to {trainer_args.output_dir}")
+            logger.info(
+                f"EfficiencyTracker enabled, metrics will be saved to {trainer_args.output_dir}"
+            )
         else:
-            logger.info("Skipping EfficiencyTracker initialization on non-main process (distributed training)")
+            logger.info(
+                "Skipping EfficiencyTracker initialization on non-main process (distributed training)"
+            )
 
     trainer = trainer_cls(
         model=model,

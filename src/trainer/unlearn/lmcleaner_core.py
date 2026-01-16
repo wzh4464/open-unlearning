@@ -11,13 +11,12 @@ LMCleaner Core Components: 在线遗忘的核心算法组件
 
 import logging
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Callable, Any
 import weakref
 
 import torch
 import torch.nn as nn
-from torch.func import functional_call, vmap, grad
 
 logger = logging.getLogger(__name__)
 
@@ -36,10 +35,16 @@ class AuditRecord(dict):
 
     def __post_init__(self):
         # 使其可以像字典一样使用
-        dict.__init__(self,
-                     tz=self.tz, tau=self.tau, K_used=self.K_used,
-                     v_norm=self.v_norm, hvp_calls=self.hvp_calls,
-                     mode=self.mode, damping=self.damping)
+        dict.__init__(
+            self,
+            tz=self.tz,
+            tau=self.tau,
+            K_used=self.K_used,
+            v_norm=self.v_norm,
+            hvp_calls=self.hvp_calls,
+            mode=self.mode,
+            damping=self.damping,
+        )
 
 
 @dataclass
@@ -56,7 +61,9 @@ class StepRecord:
     diag_H: Optional[torch.Tensor] = None  # 对角Hessian近似(可选)
 
     def __repr__(self):
-        return f"StepRecord(step={self.step_id}, eta={self.eta}, batch_id={self.batch_id})"
+        return (
+            f"StepRecord(step={self.step_id}, eta={self.eta}, batch_id={self.batch_id})"
+        )
 
 
 class StepLog:
@@ -147,7 +154,9 @@ def hvp_exact(
     grads = torch.autograd.grad(loss, params, create_graph=True)
 
     # 计算梯度与v的点积
-    dot = sum((g * v_part).sum() for g, v_part in zip(grads, _unflatten_like(v, params)))
+    dot = sum(
+        (g * v_part).sum() for g, v_part in zip(grads, _unflatten_like(v, params))
+    )
 
     # 计算二阶导数
     hvp = torch.autograd.grad(dot, params)
@@ -184,7 +193,7 @@ def hvp_ggn(
     # 使用torch.func.jvp计算Jacobian-vector product
     # 首先前向传播
     outputs = model(**batch_data)
-    logits = outputs.logits if hasattr(outputs, 'logits') else outputs
+    logits = outputs.logits if hasattr(outputs, "logits") else outputs
 
     # 计算 ∇params(output) @ v
     # 使用反向传播: 如果设置grad_outputs=v, 得到的是 J^T v
@@ -195,16 +204,14 @@ def hvp_ggn(
     # 实际上对于交叉熵,可以用Fisher信息矩阵近似
 
     # 计算损失关于logits的梯度
-    if hasattr(outputs, 'loss'):
+    if hasattr(outputs, "loss"):
         loss = outputs.loss
     else:
         # 计算交叉熵损失
-        labels = batch_data.get('labels', None)
+        labels = batch_data.get("labels", None)
         if labels is not None:
             loss = torch.nn.functional.cross_entropy(
-                logits.view(-1, logits.size(-1)),
-                labels.view(-1),
-                reduction='mean'
+                logits.view(-1, logits.size(-1)), labels.view(-1), reduction="mean"
             )
         else:
             raise ValueError("No loss or labels found")
@@ -250,7 +257,7 @@ def hvp_diagonal(
 
     model.zero_grad()
     outputs = model(**batch_data)
-    loss = outputs.loss if hasattr(outputs, 'loss') else outputs
+    loss = outputs.loss if hasattr(outputs, "loss") else outputs
 
     # 计算梯度
     grads = torch.autograd.grad(loss, params, create_graph=True)
@@ -316,11 +323,15 @@ def hvp_apply(
         batch_data = batch_reconstructor.get_batch_for_step(step_rec.step_id)
 
         if batch_data is None:
-            raise ValueError(f"Failed to reconstruct batch data for step {step_rec.step_id}")
+            raise ValueError(
+                f"Failed to reconstruct batch data for step {step_rec.step_id}"
+            )
 
     # 确保数据在正确的设备上
-    batch_data = {k: v.to(cfg.device) if isinstance(v, torch.Tensor) else v
-                  for k, v in batch_data.items()}
+    batch_data = {
+        k: v.to(cfg.device) if isinstance(v, torch.Tensor) else v
+        for k, v in batch_data.items()
+    }
 
     if mode == "diag":
         return hvp_diagonal(model, batch_data, v, step_rec.diag_H)
@@ -443,7 +454,7 @@ def apply_correction(
     offset = 0
     for p in params:
         n = p.numel()
-        v_part = v[offset:offset+n].view_as(p)
+        v_part = v[offset : offset + n].view_as(p)
         p.add_(v_part)
         offset += n
 
@@ -452,6 +463,7 @@ def apply_correction(
 
 
 # 辅助函数
+
 
 def _flatten(tensors: List[torch.Tensor]) -> torch.Tensor:
     """将张量列表展平为单个向量"""
@@ -469,7 +481,7 @@ def _unflatten_like(
     offset = 0
     for t in target:
         n = t.numel()
-        result.append(flat[offset:offset+n].view_as(t))
+        result.append(flat[offset : offset + n].view_as(t))
         offset += n
     return result
 

@@ -38,9 +38,9 @@ class PDU(GradDiff):
         self.can_update = True
 
     def final_loss_value(self, losses):
-        assert len(losses) == len(
-            self.preferences
-        ), f"Expected {len(self.preferences)} losses, but got {len(losses)} losses."
+        assert len(losses) == len(self.preferences), (
+            f"Expected {len(self.preferences)} losses, but got {len(losses)} losses."
+        )
 
         # Shift the retain_loss for the primal dual method.
         # If no primal-dual method is used, gradient-based methods will not suffer
@@ -73,9 +73,9 @@ class PDU(GradDiff):
 
     @torch.no_grad()
     def post_epoch_dual_param_update(self):
-        assert (
-            self.primal_dual
-        ), "Dual parameter update requires primal dual to be enabled"
+        assert self.primal_dual, (
+            "Dual parameter update requires primal dual to be enabled"
+        )
         # Get the training dataloader
         dataloader = self.get_train_dataloader()
 
@@ -102,7 +102,9 @@ class PDU(GradDiff):
         )
         self.log({"retain_preference": self.preferences[1]})
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def compute_loss(
+        self, model, inputs, return_outputs=False, num_items_in_batch=None
+    ):
         forget_inputs = inputs["forget"]
         forget_inputs = {
             "input_ids": forget_inputs["input_ids"],

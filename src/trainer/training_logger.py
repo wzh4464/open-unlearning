@@ -97,8 +97,10 @@ class TrainingLogger:
             self.save_interval = steps_per_epoch // checkpoints_per_epoch
             if self.save_interval == 0:
                 self.save_interval = 1
-            logger.info(f"Epoch-aware saving: {checkpoints_per_epoch} checkpoints per epoch, "
-                       f"save_interval={self.save_interval} (steps_per_epoch={steps_per_epoch})")
+            logger.info(
+                f"Epoch-aware saving: {checkpoints_per_epoch} checkpoints per epoch, "
+                f"save_interval={self.save_interval} (steps_per_epoch={steps_per_epoch})"
+            )
         else:
             self.save_interval = save_interval
 
@@ -136,10 +138,12 @@ class TrainingLogger:
         self._stop_writer = threading.Event()
         self._async_write = True  # 默认启用异步写入
 
-        logger.info(f"TrainingLogger initialized: mode={mode}, max_steps={max_steps}, "
-                   f"save_indices_only={save_indices_only}, save_rng_state={save_rng_state}, "
-                   f"compute_diag_h={compute_diag_h}, steps_per_epoch={steps_per_epoch}, "
-                   f"checkpoints_per_epoch={checkpoints_per_epoch}, save_at_epoch_end={save_at_epoch_end}")
+        logger.info(
+            f"TrainingLogger initialized: mode={mode}, max_steps={max_steps}, "
+            f"save_indices_only={save_indices_only}, save_rng_state={save_rng_state}, "
+            f"compute_diag_h={compute_diag_h}, steps_per_epoch={steps_per_epoch}, "
+            f"checkpoints_per_epoch={checkpoints_per_epoch}, save_at_epoch_end={save_at_epoch_end}"
+        )
 
     def _writer_loop(self):
         """后台写入线程的主循环"""
@@ -149,7 +153,7 @@ class TrainingLogger:
                 if task is None:  # 停止信号
                     break
                 file_path, data = task
-                with open(file_path, 'wb') as f:
+                with open(file_path, "wb") as f:
                     pickle.dump(data, f)
                 self._write_queue.task_done()
                 logger.debug(f"Async write completed: {file_path}")
@@ -160,7 +164,9 @@ class TrainingLogger:
         """启动后台写入线程"""
         if self._writer_thread is None or not self._writer_thread.is_alive():
             self._stop_writer.clear()
-            self._writer_thread = threading.Thread(target=self._writer_loop, daemon=True)
+            self._writer_thread = threading.Thread(
+                target=self._writer_loop, daemon=True
+            )
             self._writer_thread.start()
             logger.debug("Async writer thread started")
 
@@ -194,7 +200,9 @@ class TrainingLogger:
             keys_to_remove = sorted_keys[:-max_entries]
             for key in keys_to_remove:
                 del self.sample_indices_per_step[key]
-            logger.debug(f"Pruned {len(keys_to_remove)} old entries from sample_indices_per_step")
+            logger.debug(
+                f"Pruned {len(keys_to_remove)} old entries from sample_indices_per_step"
+            )
 
         # Prune rng_states_per_step
         if len(self.rng_states_per_step) > max_entries:
@@ -203,7 +211,9 @@ class TrainingLogger:
             keys_to_remove = sorted_keys[:-max_entries]
             for key in keys_to_remove:
                 del self.rng_states_per_step[key]
-            logger.debug(f"Pruned {len(keys_to_remove)} old entries from rng_states_per_step")
+            logger.debug(
+                f"Pruned {len(keys_to_remove)} old entries from rng_states_per_step"
+            )
 
     def register_step(
         self,
@@ -238,13 +248,17 @@ class TrainingLogger:
                 current_params = clone_parameters(model)
                 # Check if parameters are valid (not empty due to ZeRO-3 sharding)
                 if current_params and len(current_params) == len(self.prev_params):
-                    u = torch.cat([
-                        (new - old).view(-1)
-                        for new, old in zip(current_params, self.prev_params)
-                        if new.numel() > 0 and old.numel() > 0
-                    ])
+                    u = torch.cat(
+                        [
+                            (new - old).view(-1)
+                            for new, old in zip(current_params, self.prev_params)
+                            if new.numel() > 0 and old.numel() > 0
+                        ]
+                    )
             except Exception as e:
-                logger.warning(f"Failed to compute parameter update vector: {e}. Skipping u computation.")
+                logger.warning(
+                    f"Failed to compute parameter update vector: {e}. Skipping u computation."
+                )
                 u = None
 
         # 保存样本索引(轻存储模式)
@@ -254,8 +268,10 @@ class TrainingLogger:
         # 保存RNG状态(用于批次重建)
         if self.save_rng_state:
             self.rng_states_per_step[step_id] = {
-                'torch': torch.get_rng_state(),
-                'torch_cuda': torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+                "torch": torch.get_rng_state(),
+                "torch_cuda": torch.cuda.get_rng_state_all()
+                if torch.cuda.is_available()
+                else None,
             }
 
         # Prune old entries to prevent unbounded growth (Fix #2)
@@ -298,7 +314,9 @@ class TrainingLogger:
             try:
                 self.prev_params = clone_parameters(model)
             except Exception as e:
-                logger.debug(f"Failed to clone parameters: {e}. This is expected with DeepSpeed ZeRO-3.")
+                logger.debug(
+                    f"Failed to clone parameters: {e}. This is expected with DeepSpeed ZeRO-3."
+                )
 
         # 定期保存到磁盘
         if self.save_interval > 0 and step_id % self.save_interval == 0:
@@ -388,10 +406,12 @@ class TrainingLogger:
             "is_epoch_end": step_id in self.epoch_end_steps,
         }
         meta_file = checkpoint_dir / "checkpoint_meta.json"
-        with open(meta_file, 'w') as f:
+        with open(meta_file, "w") as f:
             json.dump(checkpoint_meta, f, indent=2)
 
-        logger.info(f"Saved model checkpoint at epoch {epoch}, step {step_id} to {checkpoint_dir}")
+        logger.info(
+            f"Saved model checkpoint at epoch {epoch}, step {step_id} to {checkpoint_dir}"
+        )
 
     def on_epoch_end(self, epoch: int, step_id: int, model: Optional[nn.Module] = None):
         """
@@ -431,7 +451,9 @@ class TrainingLogger:
                 checkpoints_by_epoch[epoch] = []
 
             # Check if this step is a checkpoint
-            is_intermediate = self.save_interval > 0 and step_id % self.save_interval == 0
+            is_intermediate = (
+                self.save_interval > 0 and step_id % self.save_interval == 0
+            )
             is_epoch_end = step_id in self.epoch_end_steps
 
             if is_intermediate or is_epoch_end:
@@ -469,31 +491,36 @@ class TrainingLogger:
         }
 
         meta_file = self.log_dir / "meta.json"
-        with open(meta_file, 'w') as f:
+        with open(meta_file, "w") as f:
             json.dump(meta, f, indent=2)
 
         # 保存批次索引
         index_file = self.log_dir / "batch_index.json"
-        with open(index_file, 'w') as f:
+        with open(index_file, "w") as f:
             json.dump(self.batch_index, f, indent=2)
 
         # 保存样本索引(轻存储模式)
         if self.save_indices_only and self.sample_indices_per_step:
             indices_file = self.log_dir / "sample_indices.json"
             # Convert int keys to strings for JSON serialization
-            serializable_indices = {str(k): v for k, v in self.sample_indices_per_step.items()}
-            with open(indices_file, 'w') as f:
+            serializable_indices = {
+                str(k): v for k, v in self.sample_indices_per_step.items()
+            }
+            with open(indices_file, "w") as f:
                 json.dump(serializable_indices, f, indent=2)
 
         # 保存RNG状态(用于批次重建)
         if self.save_rng_state and self.rng_states_per_step:
             rng_file = self.log_dir / f"rng_states_{step_id}.pkl"
-            with open(rng_file, 'wb') as f:
+            with open(rng_file, "wb") as f:
                 pickle.dump(self.rng_states_per_step, f)
 
         # 增量保存: 只保存新增的记录
-        new_records = [rec for rec in self.step_log.buffer
-                       if rec.step_id > self._last_saved_step_id]
+        new_records = [
+            rec
+            for rec in self.step_log.buffer
+            if rec.step_id > self._last_saved_step_id
+        ]
 
         if not new_records:
             logger.debug(f"No new records to save at step {step_id}")
@@ -519,11 +546,15 @@ class TrainingLogger:
         if self._async_write:
             self.start_async_writer()
             self._write_queue.put((chunk_file, serializable_records))
-            logger.info(f"Queued {len(new_records)} records for async write at step {step_id}")
+            logger.info(
+                f"Queued {len(new_records)} records for async write at step {step_id}"
+            )
         else:
-            with open(chunk_file, 'wb') as f:
+            with open(chunk_file, "wb") as f:
                 pickle.dump(serializable_records, f)
-            logger.info(f"Saved {len(new_records)} records at step {step_id} to {self.log_dir}")
+            logger.info(
+                f"Saved {len(new_records)} records at step {step_id} to {self.log_dir}"
+            )
 
         # 更新已保存的最后一个 step_id
         self._last_saved_step_id = new_records[-1].step_id
@@ -561,7 +592,7 @@ class TrainingLogger:
             logger.warning(f"Meta file not found: {meta_file}")
             return
 
-        with open(meta_file, 'r') as f:
+        with open(meta_file, "r") as f:
             meta = json.load(f)
 
         # 更新配置
@@ -579,16 +610,18 @@ class TrainingLogger:
         # 加载批次索引
         index_file = self.log_dir / "batch_index.json"
         if index_file.exists():
-            with open(index_file, 'r') as f:
+            with open(index_file, "r") as f:
                 self.batch_index = json.load(f)
 
         # 加载样本索引(轻存储模式)
         indices_file = self.log_dir / "sample_indices.json"
         if indices_file.exists():
-            with open(indices_file, 'r') as f:
+            with open(indices_file, "r") as f:
                 serializable_indices = json.load(f)
                 # Convert string keys back to int
-                self.sample_indices_per_step = {int(k): v for k, v in serializable_indices.items()}
+                self.sample_indices_per_step = {
+                    int(k): v for k, v in serializable_indices.items()
+                }
 
         # 加载RNG状态
         if step_id is None:
@@ -596,7 +629,7 @@ class TrainingLogger:
 
         rng_file = self.log_dir / f"rng_states_{step_id}.pkl"
         if rng_file.exists():
-            with open(rng_file, 'rb') as f:
+            with open(rng_file, "rb") as f:
                 self.rng_states_per_step = pickle.load(f)
 
         # 检查是否使用增量保存格式
@@ -609,7 +642,7 @@ class TrainingLogger:
             chunk_files = sorted(self.log_dir.glob("step_records_chunk_*.pkl"))
             if chunk_files:
                 for chunk_file in chunk_files:
-                    with open(chunk_file, 'rb') as f:
+                    with open(chunk_file, "rb") as f:
                         chunk_records = pickle.load(f)
                     for rec_dict in chunk_records:
                         record = StepRecord(
@@ -621,7 +654,9 @@ class TrainingLogger:
                             diag_H=rec_dict.get("diag_H"),
                         )
                         self.step_log.add(record)
-                logger.info(f"Loaded {len(chunk_files)} chunk files from {self.log_dir}")
+                logger.info(
+                    f"Loaded {len(chunk_files)} chunk files from {self.log_dir}"
+                )
             else:
                 logger.warning(f"No chunk files found in {self.log_dir}")
         else:
@@ -631,7 +666,7 @@ class TrainingLogger:
                 logger.warning(f"Records file not found: {records_file}")
                 return
 
-            with open(records_file, 'rb') as f:
+            with open(records_file, "rb") as f:
                 serializable_records = pickle.load(f)
 
             for rec_dict in serializable_records:
@@ -647,7 +682,9 @@ class TrainingLogger:
 
         self.current_step = meta.get("current_step", 0)
 
-        logger.info(f"Loaded training log from {self.log_dir}, {len(self.step_log.buffer)} records")
+        logger.info(
+            f"Loaded training log from {self.log_dir}, {len(self.step_log.buffer)} records"
+        )
 
     def clear(self):
         """清空日志"""
@@ -683,11 +720,11 @@ def reconstruct_batch_from_indices(
     """
     # 恢复RNG状态(如果提供)
     if rng_state is not None:
-        if 'torch' in rng_state and rng_state['torch'] is not None:
-            torch.set_rng_state(rng_state['torch'])
-        if 'torch_cuda' in rng_state and rng_state['torch_cuda'] is not None:
+        if "torch" in rng_state and rng_state["torch"] is not None:
+            torch.set_rng_state(rng_state["torch"])
+        if "torch_cuda" in rng_state and rng_state["torch_cuda"] is not None:
             if torch.cuda.is_available():
-                torch.cuda.set_rng_state_all(rng_state['torch_cuda'])
+                torch.cuda.set_rng_state_all(rng_state["torch_cuda"])
 
     # 从数据集获取样本
     samples = [dataset[idx] for idx in sample_indices]

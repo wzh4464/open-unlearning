@@ -21,17 +21,14 @@ LMCleaner Sample-Level Implementation: 样本级在线遗忘
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import List, Optional, Any
 
 import torch
-import torch.nn as nn
 
 from trainer.unlearn.base import UnlearnTrainer
 from .lmcleaner_core import (
     HVPConfig,
-    StepLog,
     AuditRecord,
-    compute_correction,
     apply_correction,
 )
 from ..training_logger import TrainingLogger, BatchReconstructor
@@ -63,7 +60,7 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         apply_immediately: bool = False,
         audit_dir: Optional[str] = None,
         *args,
-        **kwargs
+        **kwargs,
     ):
         super().__init__(*args, **kwargs)
 
@@ -78,7 +75,7 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         self.hvp_config = HVPConfig(
             mode=hessian_mode,
             damping=damping,
-            device=str(self.model.device) if hasattr(self.model, 'device') else 'cuda',
+            device=str(self.model.device) if hasattr(self.model, "device") else "cuda",
             dtype=next(self.model.parameters()).dtype,
         )
 
@@ -89,8 +86,7 @@ class LMCleanerSampleLevel(UnlearnTrainer):
 
         # 加载训练日志
         self.training_logger = TrainingLogger(
-            log_dir=str(self.training_log_dir),
-            mode="sample"
+            log_dir=str(self.training_log_dir), mode="sample"
         )
         self.training_logger.load_from_disk()
 
@@ -120,14 +116,14 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         """
         forget_sample_ids = []
 
-        if hasattr(self.train_dataset, 'forget_dataset'):
+        if hasattr(self.train_dataset, "forget_dataset"):
             forget_ds = self.train_dataset.forget_dataset
 
             # 如果数据集有sample_id属性
-            if hasattr(forget_ds, 'sample_ids'):
+            if hasattr(forget_ds, "sample_ids"):
                 forget_sample_ids = forget_ds.sample_ids
             # 否则使用索引作为sample_id
-            elif hasattr(forget_ds, 'original_indices'):
+            elif hasattr(forget_ds, "original_indices"):
                 forget_sample_ids = forget_ds.original_indices
             else:
                 forget_sample_ids = list(range(len(forget_ds)))
@@ -206,8 +202,11 @@ class LMCleanerSampleLevel(UnlearnTrainer):
 
             # 计算 H[s] @ v using hvp_apply
             from .lmcleaner_core import hvp_apply
+
             with torch.enable_grad():
-                hvp = hvp_apply(v, srec, self.hvp_config, self.model, None, self.batch_reconstructor)
+                hvp = hvp_apply(
+                    v, srec, self.hvp_config, self.model, None, self.batch_reconstructor
+                )
 
             # v ← v - η[s] * hvp
             v = v - srec.eta * hvp
@@ -254,9 +253,13 @@ class LMCleanerSampleLevel(UnlearnTrainer):
             return
 
         # 初始化批次重建器(如果需要)
-        if self.batch_reconstructor is None and hasattr(self, 'train_dataset') and hasattr(self, 'data_collator'):
+        if (
+            self.batch_reconstructor is None
+            and hasattr(self, "train_dataset")
+            and hasattr(self, "data_collator")
+        ):
             reconstruct_dataset = self.train_dataset
-            if hasattr(self.train_dataset, 'full_dataset'):
+            if hasattr(self.train_dataset, "full_dataset"):
                 reconstruct_dataset = self.train_dataset.full_dataset
 
             self.batch_reconstructor = BatchReconstructor(
@@ -277,7 +280,9 @@ class LMCleanerSampleLevel(UnlearnTrainer):
 
         # 对每个forget样本计算并应用校正
         for i, tz in enumerate(forget_steps):
-            logger.info(f"Processing forget sample {i+1}/{len(forget_steps)}: tz={tz}")
+            logger.info(
+                f"Processing forget sample {i + 1}/{len(forget_steps)}: tz={tz}"
+            )
 
             try:
                 # 计算参数校正向量(样本级)
@@ -315,12 +320,14 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         # 转换为可序列化的格式
         serializable_records = [dict(record) for record in self.audit_records]
 
-        with open(audit_file, 'w') as f:
+        with open(audit_file, "w") as f:
             json.dump(serializable_records, f, indent=2)
 
         logger.info(f"Saved {len(self.audit_records)} audit records to {audit_file}")
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+    def compute_loss(
+        self, model, inputs, return_outputs=False, num_items_in_batch=None
+    ):
         """
         重写损失计算
 
@@ -354,7 +361,7 @@ class LMCleanerSampleLevel(UnlearnTrainer):
             self._apply_unlearning()
 
         # 如果有retain数据且需要微调,调用父类训练
-        if hasattr(self.train_dataset, 'retain_dataset'):
+        if hasattr(self.train_dataset, "retain_dataset"):
             logger.info("Fine-tuning on retain data...")
             return super().train()
         else:
@@ -379,11 +386,12 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         self.model.save_pretrained(output_dir)
 
         # 保存tokenizer
-        if hasattr(self, 'tokenizer') and self.tokenizer is not None:
+        if hasattr(self, "tokenizer") and self.tokenizer is not None:
             self.tokenizer.save_pretrained(output_dir)
 
         # 保存遗忘元信息
         import json
+
         meta = {
             "method": "LMCleanerSampleLevel",
             "K": self.K,
@@ -395,7 +403,7 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         }
 
         meta_file = output_dir / "unlearning_meta.json"
-        with open(meta_file, 'w') as f:
+        with open(meta_file, "w") as f:
             json.dump(meta, f, indent=2)
 
         logger.info(f"Saved unlearned model to {output_dir}")

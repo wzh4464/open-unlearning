@@ -154,6 +154,7 @@ class CudaCacheCallback(TrainerCallback):
     Args:
         interval (int): Number of steps between cache clearing operations. Default: 10
     """
+
     def __init__(self, interval=10):
         self.interval = interval
 
@@ -179,12 +180,15 @@ class CudaCacheCallback(TrainerCallback):
 @dataclass
 class EfficiencyMetrics:
     """Efficiency metrics for unlearning methods"""
+
     # Time metrics
     unlearning_time_seconds: float = 0.0  # Time for unlearning operation only
 
     # Memory metrics
     peak_gpu_memory_mb: float = 0.0
-    intermediate_storage_mb: float = 0.0  # Temporary storage (gradients, checkpoints, etc.)
+    intermediate_storage_mb: float = (
+        0.0  # Temporary storage (gradients, checkpoints, etc.)
+    )
 
     # Throughput metrics
     tokens_per_second: float = 0.0
@@ -219,7 +223,7 @@ class EfficiencyMetrics:
 
     def save(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, 'w') as f:
+        with open(path, "w") as f:
             json.dump(self.to_dict(), f, indent=2)
 
 
@@ -230,8 +234,13 @@ class EfficiencyTracker(TrainerCallback):
     For unlearning benchmarks, we care about the cost of the unlearning operation itself.
     """
 
-    def __init__(self, output_dir: str = None, storage_dirs: list = None,
-                 gpu_sampling_interval: int = 10, storage_check_interval: int = 10):
+    def __init__(
+        self,
+        output_dir: str = None,
+        storage_dirs: list = None,
+        gpu_sampling_interval: int = 10,
+        storage_check_interval: int = 10,
+    ):
         self.output_dir = Path(output_dir) if output_dir else None
         # Normalize storage_dirs to Path objects once at init
         self.storage_dirs = [
@@ -277,6 +286,7 @@ class EfficiencyTracker(TrainerCallback):
         """Try to initialize NVML for GPU utilization tracking"""
         try:
             import pynvml
+
             pynvml.nvmlInit()
             self._nvml_initialized = True
             # Get handle for first GPU (or current device)
@@ -292,6 +302,7 @@ class EfficiencyTracker(TrainerCallback):
             return 0.0
         try:
             import pynvml
+
             util = pynvml.nvmlDeviceGetUtilizationRates(self._nvml_handle)
             return float(util.gpu)
         except Exception:
@@ -310,14 +321,14 @@ class EfficiencyTracker(TrainerCallback):
         if not path.exists():
             return 0.0
         total = 0
-        for f in path.rglob('*'):
+        for f in path.rglob("*"):
             if f.is_file():
                 try:
                     total += f.stat().st_size
                 except (PermissionError, OSError):
                     # Ignore files that can't be accessed, continue scanning others
                     continue
-        return total / (1024 ** 2)
+        return total / (1024**2)
 
     def _get_intermediate_storage(self) -> float:
         """Calculate total intermediate storage across monitored directories"""
@@ -328,7 +339,7 @@ class EfficiencyTracker(TrainerCallback):
 
     def _get_sample_counts(self, trainer):
         """Extract forget and retain sample counts from dataset"""
-        if trainer is None or not hasattr(trainer, 'train_dataset'):
+        if trainer is None or not hasattr(trainer, "train_dataset"):
             return 0, 0
 
         dataset = trainer.train_dataset
@@ -336,15 +347,15 @@ class EfficiencyTracker(TrainerCallback):
         retain_count = 0
 
         # Check for ForgetRetainDataset structure
-        if hasattr(dataset, 'forget') and hasattr(dataset, 'retain'):
+        if hasattr(dataset, "forget") and hasattr(dataset, "retain"):
             forget_count = len(dataset.forget) if dataset.forget else 0
             retain_count = len(dataset.retain) if dataset.retain else 0
-        elif hasattr(dataset, 'forget_dataset') and hasattr(dataset, 'retain_dataset'):
+        elif hasattr(dataset, "forget_dataset") and hasattr(dataset, "retain_dataset"):
             forget_count = len(dataset.forget_dataset) if dataset.forget_dataset else 0
             retain_count = len(dataset.retain_dataset) if dataset.retain_dataset else 0
         else:
             # Single dataset, assume all are forget samples
-            forget_count = len(dataset) if hasattr(dataset, '__len__') else 0
+            forget_count = len(dataset) if hasattr(dataset, "__len__") else 0
 
         return forget_count, retain_count
 
@@ -388,7 +399,7 @@ class EfficiencyTracker(TrainerCallback):
                 pass
 
         # Get sample counts
-        trainer = kwargs.get('trainer')
+        trainer = kwargs.get("trainer")
         self.forget_samples, self.retain_samples = self._get_sample_counts(trainer)
 
     def on_step_end(self, args, state, control, **kwargs):
@@ -403,15 +414,16 @@ class EfficiencyTracker(TrainerCallback):
 
         # Track peak GPU memory
         if torch.cuda.is_available():
-            current_memory = torch.cuda.max_memory_allocated() / (1024 ** 2)
+            current_memory = torch.cuda.max_memory_allocated() / (1024**2)
             self.peak_memory = max(self.peak_memory, current_memory)
 
         # Track peak intermediate storage (throttled to avoid overhead)
         if self.storage_dirs:
-            current_step = getattr(state, 'global_step', 0)
+            current_step = getattr(state, "global_step", 0)
             should_check = (
-                self._last_storage_check_step is None or
-                (current_step - self._last_storage_check_step) >= self.storage_check_interval
+                self._last_storage_check_step is None
+                or (current_step - self._last_storage_check_step)
+                >= self.storage_check_interval
             )
             if should_check:
                 self._last_storage_value = self._get_intermediate_storage()
@@ -420,7 +432,7 @@ class EfficiencyTracker(TrainerCallback):
 
         # Sample GPU utilization periodically
         if self._nvml_initialized:
-            current_step = getattr(state, 'global_step', 0)
+            current_step = getattr(state, "global_step", 0)
             if current_step % self.gpu_sampling_interval == 0:
                 util = self._get_gpu_utilization()
                 if util > 0:
@@ -440,7 +452,9 @@ class EfficiencyTracker(TrainerCallback):
     def on_train_end(self, args, state, control, model=None, **kwargs):
         """Compute and save final unlearning efficiency metrics"""
         if not self.start_time:
-            logger.warning("Start time was not recorded, timing metrics may be inaccurate")
+            logger.warning(
+                "Start time was not recorded, timing metrics may be inaccurate"
+            )
 
         unlearning_time = time.time() - self.start_time if self.start_time else 0
 
@@ -454,17 +468,18 @@ class EfficiencyTracker(TrainerCallback):
         if self._nvml_initialized:
             try:
                 import pynvml
+
                 pynvml.nvmlShutdown()
             except Exception as e:
                 logger.debug("Failed to shut down NVML: %s", e)
 
         # Use state.global_step for accurate step count
-        total_steps = state.global_step if hasattr(state, 'global_step') else 0
+        total_steps = state.global_step if hasattr(state, "global_step") else 0
 
         # Estimate tokens processed during unlearning
         tokens_per_sec = 0
         num_tokens = 0
-        if hasattr(state, 'num_input_tokens_seen') and state.num_input_tokens_seen > 0:
+        if hasattr(state, "num_input_tokens_seen") and state.num_input_tokens_seen > 0:
             num_tokens = state.num_input_tokens_seen
             tokens_per_sec = num_tokens / unlearning_time if unlearning_time > 0 else 0
 
@@ -473,19 +488,21 @@ class EfficiencyTracker(TrainerCallback):
         if model is not None:
             model_size_mb = sum(
                 p.numel() * p.element_size() for p in model.parameters()
-            ) / (1024 ** 2)
+            ) / (1024**2)
 
         # Estimate FLOPs
         flops = self._estimate_flops(model, num_tokens)
 
         # Determine if method requires retain set (check trainer type)
         requires_retain_set = False
-        trainer = kwargs.get('trainer')
+        trainer = kwargs.get("trainer")
         if trainer is not None:
             trainer_name = trainer.__class__.__name__
             # Methods that use retain set for regularization
-            retain_set_methods = ['GradDiff', 'NPO', 'DPO', 'SimNPO', 'RMU', 'UNDIAL']
-            requires_retain_set = any(method in trainer_name for method in retain_set_methods)
+            retain_set_methods = ["GradDiff", "NPO", "DPO", "SimNPO", "RMU", "UNDIAL"]
+            requires_retain_set = any(
+                method in trainer_name for method in retain_set_methods
+            )
 
         # Compute latency statistics
         latency_mean = 0.0
