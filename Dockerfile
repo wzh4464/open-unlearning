@@ -3,10 +3,10 @@ FROM pytorch/pytorch:2.9.1-cuda12.6-cudnn9-devel
 ENV DEBIAN_FRONTEND=noninteractive
 
 # System dependencies + python symlink
-RUN apt-get update && apt-get install -y \
-    wget unzip git tmux curl build-essential ninja-build openssh-client openssh-server nvtop && \
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget unzip git tmux curl openssh-client openssh-server && \
     ln -sf /usr/bin/python3 /usr/bin/python && \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 WORKDIR /app
 
