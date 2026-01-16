@@ -1,5 +1,5 @@
 defaults:
-  - model: Phi-3.5-1B-Instruct
+  - model: Phi-3.5-mini-instruct
   - trainer: GradAscent
   - data: unlearn
   - collator: DataCollatorForSupervisedDataset
