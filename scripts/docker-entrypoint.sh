@@ -57,8 +57,12 @@ if [ -n "$PUBLIC_KEY" ]; then
     sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config
     sed -i 's/^#\?PubkeyAuthentication .*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
     sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
-    /usr/sbin/sshd
-    echo "SSHD started on port 22"
+    if ! pgrep -x sshd >/dev/null 2>&1; then
+        /usr/sbin/sshd
+        echo "SSHD started on port 22"
+    else
+        echo "SSHD already running"
+    fi
 fi
 
 # === Setup Git config from workspace (non-sensitive) ===
@@ -93,6 +97,12 @@ if [ ! -f /workspace/.initialized ]; then
 
     touch /workspace/.initialized
     echo "=== Initialization complete ==="
+fi
+
+# If no command provided (RunPod sometimes overrides CMD), keep container alive
+if [ $# -eq 0 ]; then
+    echo "No CMD provided. Defaulting to: sleep infinity"
+    set -- sleep infinity
 fi
 
 exec "$@"
