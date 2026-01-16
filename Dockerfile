@@ -44,4 +44,4 @@ HEALTHCHECK --interval=60s --timeout=10s --start-period=30s \
   CMD python -c "import torch; assert torch.cuda.is_available()" || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["bash"]
+CMD ["sleep", "infinity"]
