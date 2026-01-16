@@ -1,14 +1,10 @@
-FROM nvidia/cuda:12.4.1-devel-ubuntu22.04
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System dependencies
+# System dependencies (no Python needed - already in base image)
 RUN apt-get update && apt-get install -y \
-    wget unzip git tmux curl build-essential ninja-build \
-    software-properties-common openssh-client && \
-    add-apt-repository ppa:deadsnakes/ppa && \
-    apt-get update && apt-get install -y \
-    python3.11 python3.11-venv python3.11-dev && \
+    wget unzip git tmux curl build-essential ninja-build openssh-client && \
     rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -17,15 +13,15 @@ ENV PATH="/root/.local/bin:$PATH"
 
 WORKDIR /app
 
-# Copy dependency files first (layer caching optimization)
+# Copy dependency files first
 COPY pyproject.toml uv.lock .python-version ./
 
-# Install PyTorch with CUDA first (uv needs torch before flash-attn)
-RUN uv venv --python 3.11 && \
+# Create venv using system Python (already 3.11), PyTorch already installed
+RUN uv venv --python $(which python) && \
     . .venv/bin/activate && \
-    uv pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124
+    uv pip install torch==2.5.1
 
-# Install project dependencies with uv sync
+# Install project dependencies
 COPY src/ src/
 RUN . .venv/bin/activate && \
     uv sync --extra linux-cuda
@@ -41,7 +37,6 @@ ENV VIRTUAL_ENV="/app/.venv"
 COPY scripts/docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Health check
 HEALTHCHECK --interval=60s --timeout=10s --start-period=30s \
   CMD python -c "import torch; assert torch.cuda.is_available()" || exit 1
 
