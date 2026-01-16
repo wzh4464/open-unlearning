@@ -1,5 +1,5 @@
 defaults:
-  - unlearn_base
+  - /trainer/phi3_5/unlearn_base
 
 handler: GradAscent
 
