@@ -1,0 +1,15 @@
+services:
+  open-unlearning:
+    build:
+      context: .
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HF_TOKEN=${HF_TOKEN}
+      - SSH_PRIVATE_KEY=${SSH_PRIVATE_KEY}
+    volumes:
+      - ./workspace:/workspace
+    ports:
+      - "6006:6006"
+    stdin_open: true
+    tty: true
