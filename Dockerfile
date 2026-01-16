@@ -1,10 +1,11 @@
-FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
+FROM pytorch/pytorch:2.9.1-cuda12.6-cudnn9-devel
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System dependencies
+# System dependencies + python symlink
 RUN apt-get update && apt-get install -y \
     wget unzip git tmux curl build-essential ninja-build openssh-client openssh-server nvtop && \
+    ln -sf /usr/bin/python3 /usr/bin/python && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
