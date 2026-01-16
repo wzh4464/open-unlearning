@@ -4,7 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # System dependencies
 RUN apt-get update && apt-get install -y \
-    wget unzip git tmux curl build-essential ninja-build openssh-client nvtop && \
+    wget unzip git tmux curl build-essential ninja-build openssh-client openssh-server nvtop && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

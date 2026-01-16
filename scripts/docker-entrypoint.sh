@@ -45,6 +45,22 @@ if [ -f /workspace/.config/ssh_config ]; then
     echo "SSH config loaded from /workspace/.config/ssh_config"
 fi
 
+# === Setup SSH server for remote access ===
+if [ -n "$PUBLIC_KEY" ]; then
+    echo "Configuring SSH server..."
+    mkdir -p /var/run/sshd
+    mkdir -p ~/.ssh
+    chmod 700 ~/.ssh
+    echo "$PUBLIC_KEY" >> ~/.ssh/authorized_keys
+    chmod 600 ~/.ssh/authorized_keys
+    ssh-keygen -A
+    sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config
+    sed -i 's/^#\?PubkeyAuthentication .*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+    sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
+    /usr/sbin/sshd
+    echo "SSHD started on port 22"
+fi
+
 # === Setup Git config from workspace (non-sensitive) ===
 if [ -f /workspace/.config/gitconfig ]; then
     cp /workspace/.config/gitconfig ~/.gitconfig
