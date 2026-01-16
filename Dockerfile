@@ -2,36 +2,38 @@ FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System dependencies (no Python needed - already in base image)
+# System dependencies
 RUN apt-get update && apt-get install -y \
     wget unzip git tmux curl build-essential ninja-build openssh-client && \
     rm -rf /var/lib/apt/lists/*
 
-# Install uv
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:$PATH"
-
 WORKDIR /app
 
 # Copy dependency files first
-COPY pyproject.toml uv.lock .python-version ./
+COPY pyproject.toml ./
 
-# Create venv using system Python (already 3.11), PyTorch already installed
-RUN uv venv --python $(which python) && \
-    . .venv/bin/activate && \
-    uv pip install torch==2.5.1
+# Install dependencies directly to system Python
+RUN pip install --no-cache-dir \
+    accelerate>=1.11.0 \
+    datasets>=4.3.0 \
+    hydra-colorlog>=1.2.0 \
+    hydra-core>=1.3.2 \
+    lm-eval>=0.4.9 \
+    rouge-score>=0.1.2 \
+    scikit-learn>=1.7.2 \
+    scipy>=1.16.2 \
+    tensorboard>=2.20.0 \
+    transformers>=4.57.1 \
+    deepspeed>=0.18.4 \
+    ninja>=1.13.0 \
+    packaging>=25.0
 
-# Install project dependencies
-COPY src/ src/
-RUN . .venv/bin/activate && \
-    uv sync --extra linux-cuda
+# Build flash-attn from source (needs torch visible)
+RUN pip install flash-attn==2.8.3 --no-build-isolation
 
-# Copy remaining code
+# Copy code
 COPY . .
 
-# Make venv the default Python
-ENV PATH="/app/.venv/bin:$PATH"
-ENV VIRTUAL_ENV="/app/.venv"
 ENV IN_DOCKER=1
 
 # Entrypoint
