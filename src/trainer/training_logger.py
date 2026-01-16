@@ -15,6 +15,11 @@ TrainingLogger: 训练过程日志记录模块
 1. 轻存储: 只保存索引+随机种子(save_indices_only=True, save_rng_state=True)
 2. 重存储: 保存完整batch张量(save_batch_data=True)
 3. 对角Hessian: 保存对角Hessian近似(compute_diag_h=True)
+
+支持epoch感知的检查点保存:
+- steps_per_epoch: 每个epoch的步数
+- checkpoints_per_epoch: 每个epoch保存的中间检查点数量
+- save_at_epoch_end: 是否在epoch结束时保存模型参数
 """
 
 import json
@@ -42,12 +47,15 @@ class TrainingLogger:
         log_dir: 日志保存目录
         max_steps: 最大保留步数(环形缓冲区大小)
         mode: "batch" 或 "sample"
-        save_interval: 保存到磁盘的间隔步数(0表示不保存)
+        save_interval: 保存到磁盘的间隔步数(0表示不保存,会被epoch感知参数覆盖)
         save_batch_data: 是否保存批次数据(用于HVP,会占用较大空间)
         save_indices_only: 是否只保存样本索引(轻存储模式)
         save_rng_state: 是否保存随机数生成器状态(用于批次重建)
         compute_diag_h: 是否计算并保存对角Hessian近似
         batch_size_at_training: 训练时的批次大小(用于重建批次)
+        steps_per_epoch: 每个epoch的步数(用于epoch感知保存)
+        checkpoints_per_epoch: 每个epoch保存的中间检查点数量(不包括epoch结束时的检查点)
+        save_at_epoch_end: 是否在epoch结束时保存模型参数检查点
     """
 
     def __init__(
@@ -61,18 +69,43 @@ class TrainingLogger:
         save_rng_state: bool = False,
         compute_diag_h: bool = False,
         batch_size_at_training: Optional[int] = None,
+        steps_per_epoch: Optional[int] = None,
+        checkpoints_per_epoch: int = 0,
+        save_at_epoch_end: bool = False,
     ):
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
         self.max_steps = max_steps
         self.mode = mode
-        self.save_interval = save_interval
         self.save_batch_data = save_batch_data
         self.save_indices_only = save_indices_only
         self.save_rng_state = save_rng_state
         self.compute_diag_h = compute_diag_h
         self.batch_size_at_training = batch_size_at_training
+
+        # Epoch-aware checkpoint parameters
+        self.steps_per_epoch = steps_per_epoch
+        self.checkpoints_per_epoch = checkpoints_per_epoch
+        self.save_at_epoch_end = save_at_epoch_end
+
+        # Calculate save_interval based on epoch-aware parameters
+        if steps_per_epoch is not None and checkpoints_per_epoch > 0:
+            # Ensure equal spacing of checkpoints within each epoch
+            self.save_interval = steps_per_epoch // checkpoints_per_epoch
+            if self.save_interval == 0:
+                self.save_interval = 1
+            logger.info(f"Epoch-aware saving: {checkpoints_per_epoch} checkpoints per epoch, "
+                       f"save_interval={self.save_interval} (steps_per_epoch={steps_per_epoch})")
+        else:
+            self.save_interval = save_interval
+
+        # Epoch tracking
+        self.current_epoch = 0
+        self.epoch_end_steps: List[int] = []  # Steps at which each epoch ends
+        self.model_checkpoints_dir = self.log_dir / "model_checkpoints"
+        if save_at_epoch_end:
+            self.model_checkpoints_dir.mkdir(parents=True, exist_ok=True)
 
         # 创建步骤日志
         self.step_log = StepLog(max_size=max_steps)
@@ -94,7 +127,8 @@ class TrainingLogger:
 
         logger.info(f"TrainingLogger initialized: mode={mode}, max_steps={max_steps}, "
                    f"save_indices_only={save_indices_only}, save_rng_state={save_rng_state}, "
-                   f"compute_diag_h={compute_diag_h}")
+                   f"compute_diag_h={compute_diag_h}, steps_per_epoch={steps_per_epoch}, "
+                   f"checkpoints_per_epoch={checkpoints_per_epoch}, save_at_epoch_end={save_at_epoch_end}")
 
     def _prune_old_entries(self):
         """
@@ -287,6 +321,81 @@ class TrainingLogger:
         """获取批次对应的步骤ID"""
         return self.batch_index.get(batch_id)
 
+    def save_model_checkpoint(self, model: nn.Module, epoch: int, step_id: int):
+        """
+        保存模型参数检查点
+
+        Args:
+            model: 模型
+            epoch: 当前epoch
+            step_id: 当前步骤ID
+        """
+        checkpoint_dir = self.model_checkpoints_dir / f"epoch_{epoch}_step_{step_id}"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save model state dict
+        state_dict = model.state_dict()
+        checkpoint_file = checkpoint_dir / "model_state_dict.pt"
+        torch.save(state_dict, checkpoint_file)
+
+        # Save checkpoint metadata
+        checkpoint_meta = {
+            "epoch": epoch,
+            "step_id": step_id,
+            "is_epoch_end": step_id in self.epoch_end_steps,
+        }
+        meta_file = checkpoint_dir / "checkpoint_meta.json"
+        with open(meta_file, 'w') as f:
+            json.dump(checkpoint_meta, f, indent=2)
+
+        logger.info(f"Saved model checkpoint at epoch {epoch}, step {step_id} to {checkpoint_dir}")
+
+    def on_epoch_end(self, epoch: int, step_id: int, model: Optional[nn.Module] = None):
+        """
+        Epoch结束时调用
+
+        Args:
+            epoch: 当前epoch (0-indexed)
+            step_id: 当前步骤ID
+            model: 模型(用于保存检查点)
+        """
+        self.current_epoch = epoch + 1  # Update to next epoch
+        self.epoch_end_steps.append(step_id)
+
+        # Save training log at epoch end
+        self.save_to_disk(step_id)
+
+        # Save model checkpoint if enabled
+        if self.save_at_epoch_end and model is not None:
+            self.save_model_checkpoint(model, epoch, step_id)
+
+        logger.info(f"Epoch {epoch} ended at step {step_id}")
+
+    def get_epoch_checkpoints(self) -> Dict[int, List[int]]:
+        """
+        获取每个epoch的检查点步骤列表
+
+        Returns:
+            Dict[epoch_id, List[step_id]]: 每个epoch的检查点步骤
+        """
+        if self.steps_per_epoch is None:
+            return {}
+
+        checkpoints_by_epoch: Dict[int, List[int]] = {}
+        for step_id in range(1, self.current_step + 1):
+            epoch = (step_id - 1) // self.steps_per_epoch
+            if epoch not in checkpoints_by_epoch:
+                checkpoints_by_epoch[epoch] = []
+
+            # Check if this step is a checkpoint
+            is_intermediate = self.save_interval > 0 and step_id % self.save_interval == 0
+            is_epoch_end = step_id in self.epoch_end_steps
+
+            if is_intermediate or is_epoch_end:
+                checkpoints_by_epoch[epoch].append(step_id)
+
+        return checkpoints_by_epoch
+
     def save_to_disk(self, step_id: Optional[int] = None):
         """
         保存日志到磁盘
@@ -308,6 +417,11 @@ class TrainingLogger:
             "save_rng_state": self.save_rng_state,
             "compute_diag_h": self.compute_diag_h,
             "batch_size_at_training": self.batch_size_at_training,
+            "steps_per_epoch": self.steps_per_epoch,
+            "checkpoints_per_epoch": self.checkpoints_per_epoch,
+            "save_at_epoch_end": self.save_at_epoch_end,
+            "current_epoch": self.current_epoch,
+            "epoch_end_steps": self.epoch_end_steps,
         }
 
         meta_file = self.log_dir / "meta.json"
@@ -358,16 +472,16 @@ class TrainingLogger:
         # Clear dictionaries after saving to free memory (Fix #1)
         if self.save_indices_only and self.sample_indices_per_step:
             self.sample_indices_per_step.clear()
-            logger.debug(f"Cleared sample_indices_per_step after saving")
+            logger.debug("Cleared sample_indices_per_step after saving")
 
         if self.save_rng_state and self.rng_states_per_step:
             self.rng_states_per_step.clear()
-            logger.debug(f"Cleared rng_states_per_step after saving")
+            logger.debug("Cleared rng_states_per_step after saving")
 
         # Explicitly clear CUDA cache to reduce fragmentation (Fix #4)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
-            logger.debug(f"Cleared CUDA cache after saving")
+            logger.debug("Cleared CUDA cache after saving")
 
     def load_from_disk(self, step_id: Optional[int] = None):
         """
@@ -391,6 +505,11 @@ class TrainingLogger:
         self.save_rng_state = meta.get("save_rng_state", False)
         self.compute_diag_h = meta.get("compute_diag_h", False)
         self.batch_size_at_training = meta.get("batch_size_at_training")
+        self.steps_per_epoch = meta.get("steps_per_epoch")
+        self.checkpoints_per_epoch = meta.get("checkpoints_per_epoch", 0)
+        self.save_at_epoch_end = meta.get("save_at_epoch_end", False)
+        self.current_epoch = meta.get("current_epoch", 0)
+        self.epoch_end_steps = meta.get("epoch_end_steps", [])
 
         # 加载批次索引
         index_file = self.log_dir / "batch_index.json"
@@ -448,6 +567,8 @@ class TrainingLogger:
         self.sample_indices_per_step.clear()
         self.rng_states_per_step.clear()
         self.current_step = 0
+        self.current_epoch = 0
+        self.epoch_end_steps.clear()
         self.prev_params = None
 
 

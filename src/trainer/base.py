@@ -6,12 +6,27 @@ import os
 import logging
 import warnings
 import torch
-from transformers import Trainer
+from transformers import Trainer, TrainerCallback
 from torch.utils.data import Dataset
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+class EpochEndCallback(TrainerCallback):
+    """Callback to notify TrainingLogger at epoch end"""
+
+    def __init__(self, training_logger):
+        self.training_logger = training_logger
+
+    def on_epoch_end(self, args, state, control, model=None, **kwargs):
+        """Called at the end of each epoch"""
+        if self.training_logger is not None:
+            epoch = int(state.epoch) - 1  # state.epoch is 1-indexed after epoch end
+            step_id = state.global_step
+            self.training_logger.on_epoch_end(epoch, step_id, model)
+        return control
 
 
 class FinetuneTrainer(Trainer):
@@ -25,6 +40,10 @@ class FinetuneTrainer(Trainer):
         with warnings.catch_warnings():
             warnings.filterwarnings("ignore", category=FutureWarning, message=".*tokenizer.*deprecated.*processing_class.*")
             super().__init__(*args, **kwargs)
+
+        # Add epoch end callback if training_logger is enabled
+        if training_logger is not None:
+            self.add_callback(EpochEndCallback(training_logger))
 
     def evaluate(
         self,
