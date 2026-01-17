@@ -1,4 +1,6 @@
 # custom .gitignore
+data
+saves
 submit.py
 !src/data/__init__.py
 logs/
@@ -9,7 +11,7 @@ ms_cache/
 logs/
 hf_cache/
 cache*/
-saves*/
+saves/
 notebooks/
 output*/
 wandb/
