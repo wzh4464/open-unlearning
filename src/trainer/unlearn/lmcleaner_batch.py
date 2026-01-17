@@ -42,6 +42,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         K: 截断窗口大小
         hessian_mode: HVP模式 ("GGN", "diag", "exact", "low_rank")
         damping: 阻尼系数λ
+        max_step: 最大步数(用于epoch-based评估,只考虑<=max_step的步骤)
         apply_immediately: 是否在初始化时立即应用遗忘(否则在train()时)
         audit_dir: 审计日志输出目录
     """
@@ -52,6 +53,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         K: int = 800,
         hessian_mode: str = "GGN",
         damping: float = 1e-4,
+        max_step: Optional[int] = None,
         apply_immediately: bool = False,
         audit_dir: Optional[str] = None,
         *args,
@@ -63,6 +65,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         self.K = K
         self.hessian_mode = hessian_mode
         self.damping = damping
+        self.max_step = max_step
         self.apply_immediately = apply_immediately
 
         # HVP配置
@@ -191,14 +194,28 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             )
             logger.info("Initialized BatchReconstructor for batch data reconstruction")
 
-        # 当前步骤(训练结束时的步骤)
-        tau = self.training_logger.current_step
+        # 当前步骤(训练结束时的步骤，或用户指定的max_step)
+        tau = self.max_step if self.max_step else self.training_logger.current_step
+
+        # 过滤forget steps，只保留 <= tau 的步骤
+        original_count = len(forget_steps)
+        forget_steps = [s for s in forget_steps if s <= tau]
+        if len(forget_steps) < original_count:
+            logger.info(
+                f"Filtered forget steps: {original_count} -> {len(forget_steps)} "
+                f"(max_step={tau})"
+            )
+
+        if not forget_steps:
+            logger.warning("No forget steps after filtering, skipping unlearning")
+            self.unlearning_applied = True
+            return
 
         # 获取模型参数列表
         params = [p for p in self.model.parameters() if p.requires_grad]
 
         logger.info(f"Applying unlearning for {len(forget_steps)} batches")
-        logger.info(f"Current step: {tau}, K: {self.K}")
+        logger.info(f"Target step (tau): {tau}, K: {self.K}")
 
         # 对每个forget步骤计算并应用校正
         for i, tz in enumerate(forget_steps):
@@ -328,6 +345,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             "K": self.K,
             "hessian_mode": self.hessian_mode,
             "damping": self.damping,
+            "max_step": self.max_step,
             "num_forget_batches": len(self.audit_records),
             "total_corrections": sum(r["hvp_calls"] for r in self.audit_records),
         }
