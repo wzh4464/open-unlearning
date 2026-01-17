@@ -4,7 +4,7 @@ model:
     attn_implementation: flash_attention_2
     torch_dtype: bfloat16
   tokenizer_args:
-    pretrained_model_name_or_path: meta-llama/Llama-2-7b-hf
+    pretrained_model_name_or_path: unsloth/Llama-2-7b-hf
   template_args:
     apply_chat_template: false
     user_start_tag: 'Question: '

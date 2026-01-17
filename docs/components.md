@@ -183,11 +183,11 @@ Example: LLaMA-3.1 model config in [`configs/model/Llama-3.1-8B-Instruct.yaml`](
 ```yaml
 model_handler: AutoModelForCausalLM
 model_args:
-  pretrained_model_name_or_path: "meta-llama/Llama-3.1-8B-Instruct"
+  pretrained_model_name_or_path: "unsloth/Llama-3.1-8B-Instruct"
   attn_implementation: 'flash_attention_2'
   torch_dtype: bfloat16
 tokenizer_args:
-  pretrained_model_name_or_path: "meta-llama/Llama-3.1-8B-Instruct"
+  pretrained_model_name_or_path: "unsloth/Llama-3.1-8B-Instruct"
 template_args:
   apply_chat_template: True
   system_prompt: You are a helpful assistant.
