@@ -79,6 +79,8 @@ echo ""
 $PYTHON_CMD src/train.py --config-name=train.yaml \
     experiment=finetune/tofu/default \
     model=${MODEL} \
+    collator=DataCollatorForSupervisedDatasetwithIndex \
+    trainer.args.remove_unused_columns=False \
     trainer.args.num_train_epochs=${NUM_EPOCHS} \
     trainer.args.per_device_train_batch_size=${BATCH_SIZE} \
     trainer.args.gradient_accumulation_steps=${GRAD_ACCUM} \
