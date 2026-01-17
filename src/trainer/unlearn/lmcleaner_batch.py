@@ -195,7 +195,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             logger.info("Initialized BatchReconstructor for batch data reconstruction")
 
         # 当前步骤(训练结束时的步骤，或用户指定的max_step)
-        tau = self.max_step if self.max_step else self.training_logger.current_step
+        tau = self.max_step if self.max_step is not None else self.training_logger.current_step
 
         # 过滤forget steps，只保留 <= tau 的步骤
         original_count = len(forget_steps)
