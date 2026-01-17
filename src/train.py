@@ -57,7 +57,9 @@ def main(cfg: DictConfig):
     )
 
     if trainer_args.do_train:
-        trainer.train()
+        # Support resume from checkpoint
+        resume_from = getattr(trainer_args, 'resume_from_checkpoint', None)
+        trainer.train(resume_from_checkpoint=resume_from)
         trainer.save_state()
         trainer.save_model(trainer_args.output_dir)
 

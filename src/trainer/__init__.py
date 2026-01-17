@@ -108,6 +108,19 @@ def load_trainer(
                 batch_size_at_training=logger_cfg.get("batch_size_at_training", None),
             )
             logger.info(f"TrainingLogger initialized: {training_logger.log_dir}")
+
+            # Check if resuming from checkpoint - also restore training logger state
+            resume_checkpoint = trainer_cfg.args.get("resume_from_checkpoint", None)
+            if resume_checkpoint:
+                from pathlib import Path
+
+                log_path = Path(logger_cfg.get("log_dir", "saves/train_logs/default"))
+                if (log_path / "meta.json").exists():
+                    training_logger.load_from_disk()
+                    logger.info(
+                        f"Resumed training logger from {log_path}, "
+                        f"current_step={training_logger.current_step}"
+                    )
         else:
             logger.info(
                 "Skipping TrainingLogger initialization on non-main process (distributed training)"

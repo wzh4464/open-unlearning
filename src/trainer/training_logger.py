@@ -22,6 +22,7 @@ TrainingLogger: 训练过程日志记录模块
 - save_at_epoch_end: 是否在epoch结束时保存模型参数
 """
 
+import gc
 import json
 import logging
 import pickle
@@ -578,6 +579,15 @@ class TrainingLogger:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             logger.debug("Cleared CUDA cache after saving")
+
+        # Clear prev_params to release CPU memory (~2GB for 1B model)
+        # It will be automatically re-cloned on the next register_step call
+        self.prev_params = None
+        logger.debug("Cleared prev_params after saving")
+
+        # Force Python garbage collection to reclaim memory
+        gc.collect()
+        logger.debug("Forced garbage collection after saving")
 
     def load_from_disk(self, step_id: Optional[int] = None):
         """
