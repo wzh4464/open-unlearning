@@ -106,8 +106,16 @@ def load_trainer(
                 save_rng_state=logger_cfg.get("save_rng_state", False),
                 compute_diag_h=logger_cfg.get("compute_diag_h", False),
                 batch_size_at_training=logger_cfg.get("batch_size_at_training", None),
+                # Epoch-aware checkpoint parameters
+                steps_per_epoch=logger_cfg.get("steps_per_epoch", None),
+                checkpoints_per_epoch=logger_cfg.get("checkpoints_per_epoch", 0),
+                save_at_epoch_end=logger_cfg.get("save_at_epoch_end", False),
+                # Memory management: sync_mode saves every step and clears memory immediately
+                sync_mode=logger_cfg.get("sync_mode", False),
             )
             logger.info(f"TrainingLogger initialized: {training_logger.log_dir}")
+            if logger_cfg.get("sync_mode", False):
+                logger.info("TrainingLogger sync_mode enabled: saving every step")
 
             # Check if resuming from checkpoint - also restore training logger state
             resume_checkpoint = trainer_cfg.args.get("resume_from_checkpoint", None)
