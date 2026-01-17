@@ -639,8 +639,13 @@ class TrainingLogger:
 
         rng_file = self.log_dir / f"rng_states_{step_id}.pkl"
         if rng_file.exists():
-            with open(rng_file, "rb") as f:
-                self.rng_states_per_step = pickle.load(f)
+            try:
+                with open(rng_file, "rb") as f:
+                    self.rng_states_per_step = pickle.load(f)
+            except (pickle.UnpicklingError, EOFError) as e:
+                logger.warning(f"Corrupted rng_states file {rng_file}: {e}, skipping")
+                rng_file.unlink()
+                logger.info(f"Removed corrupted file: {rng_file}")
 
         # 检查是否使用增量保存格式
         is_incremental = meta.get("incremental_save", False)
@@ -651,21 +656,31 @@ class TrainingLogger:
             # 增量保存格式: 加载所有 chunk 文件
             chunk_files = sorted(self.log_dir.glob("step_records_chunk_*.pkl"))
             if chunk_files:
+                loaded_count = 0
                 for chunk_file in chunk_files:
-                    with open(chunk_file, "rb") as f:
-                        chunk_records = pickle.load(f)
-                    for rec_dict in chunk_records:
-                        record = StepRecord(
-                            step_id=rec_dict["step_id"],
-                            eta=rec_dict["eta"],
-                            batch_id=rec_dict["batch_id"],
-                            u=rec_dict["u"],
-                            gbar=rec_dict["gbar"],
-                            diag_H=rec_dict.get("diag_H"),
+                    try:
+                        with open(chunk_file, "rb") as f:
+                            chunk_records = pickle.load(f)
+                        for rec_dict in chunk_records:
+                            record = StepRecord(
+                                step_id=rec_dict["step_id"],
+                                eta=rec_dict["eta"],
+                                batch_id=rec_dict["batch_id"],
+                                u=rec_dict["u"],
+                                gbar=rec_dict["gbar"],
+                                diag_H=rec_dict.get("diag_H"),
+                            )
+                            self.step_log.add(record)
+                        loaded_count += 1
+                    except (pickle.UnpicklingError, EOFError) as e:
+                        logger.warning(
+                            f"Skipping corrupted chunk file {chunk_file}: {e}"
                         )
-                        self.step_log.add(record)
+                        # Remove corrupted file to prevent future issues
+                        chunk_file.unlink()
+                        logger.info(f"Removed corrupted file: {chunk_file}")
                 logger.info(
-                    f"Loaded {len(chunk_files)} chunk files from {self.log_dir}"
+                    f"Loaded {loaded_count}/{len(chunk_files)} chunk files from {self.log_dir}"
                 )
             else:
                 logger.warning(f"No chunk files found in {self.log_dir}")
@@ -676,19 +691,24 @@ class TrainingLogger:
                 logger.warning(f"Records file not found: {records_file}")
                 return
 
-            with open(records_file, "rb") as f:
-                serializable_records = pickle.load(f)
+            try:
+                with open(records_file, "rb") as f:
+                    serializable_records = pickle.load(f)
 
-            for rec_dict in serializable_records:
-                record = StepRecord(
-                    step_id=rec_dict["step_id"],
-                    eta=rec_dict["eta"],
-                    batch_id=rec_dict["batch_id"],
-                    u=rec_dict["u"],
-                    gbar=rec_dict["gbar"],
-                    diag_H=rec_dict.get("diag_H"),
-                )
-                self.step_log.add(record)
+                for rec_dict in serializable_records:
+                    record = StepRecord(
+                        step_id=rec_dict["step_id"],
+                        eta=rec_dict["eta"],
+                        batch_id=rec_dict["batch_id"],
+                        u=rec_dict["u"],
+                        gbar=rec_dict["gbar"],
+                        diag_H=rec_dict.get("diag_H"),
+                    )
+                    self.step_log.add(record)
+            except (pickle.UnpicklingError, EOFError) as e:
+                logger.warning(f"Corrupted records file {records_file}: {e}, skipping")
+                records_file.unlink()
+                logger.info(f"Removed corrupted file: {records_file}")
 
         self.current_step = meta.get("current_step", 0)
 
