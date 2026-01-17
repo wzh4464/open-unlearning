@@ -59,6 +59,7 @@ class TrainingLogger:
         steps_per_epoch: 每个epoch的步数(用于epoch感知保存)
         checkpoints_per_epoch: 每个epoch保存的中间检查点数量(不包括epoch结束时的检查点)
         save_at_epoch_end: 是否在epoch结束时保存模型参数检查点
+        sync_mode: 同步模式,每步保存并清理内存(用于内存受限环境)
     """
 
     def __init__(
@@ -75,6 +76,7 @@ class TrainingLogger:
         steps_per_epoch: Optional[int] = None,
         checkpoints_per_epoch: int = 0,
         save_at_epoch_end: bool = False,
+        sync_mode: bool = False,
     ):
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -137,7 +139,14 @@ class TrainingLogger:
         self._write_queue: Queue = Queue()
         self._writer_thread: Optional[threading.Thread] = None
         self._stop_writer = threading.Event()
-        self._async_write = True  # 默认启用异步写入
+        self._sync_mode = sync_mode
+        # Sync mode: disable async write, save every step
+        if sync_mode:
+            self._async_write = False
+            self.save_interval = 1
+            logger.info("Sync mode enabled: saving every step synchronously")
+        else:
+            self._async_write = True
 
         logger.info(
             f"TrainingLogger initialized: mode={mode}, max_steps={max_steps}, "

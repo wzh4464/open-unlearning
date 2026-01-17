@@ -37,15 +37,22 @@ class EpochEndCallback(TrainerCallback):
 
 
 class MemoryPressureCallback(TrainerCallback):
-    """Callback to pause training when memory pressure exceeds threshold"""
+    """Callback to pause training when memory pressure or I/O queue exceeds threshold"""
 
-    def __init__(self, threshold: float = 0.8, check_interval: float = 5.0):
+    def __init__(
+        self,
+        threshold: float = 0.8,
+        io_queue_threshold: int = 30,
+        check_interval: float = 5.0,
+    ):
         """
         Args:
             threshold: Memory usage threshold (0.0-1.0) to trigger pause
-            check_interval: Seconds to wait between memory checks when paused
+            io_queue_threshold: I/O queue depth threshold to trigger pause (0 to disable)
+            check_interval: Seconds to wait between checks when paused
         """
         self.threshold = threshold
+        self.io_queue_threshold = io_queue_threshold
         self.check_interval = check_interval
         if not PSUTIL_AVAILABLE:
             logger.warning("psutil not available, MemoryPressureCallback disabled")
@@ -56,11 +63,30 @@ class MemoryPressureCallback(TrainerCallback):
             return 0.0
         return psutil.virtual_memory().percent / 100.0
 
+    def _get_io_queue_depth(self) -> int:
+        """Get current I/O queue depth from /proc/diskstats"""
+        try:
+            total_ios = 0
+            with open("/proc/diskstats", "r") as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 14:
+                        # Field 11 (0-indexed) is ios_in_progress
+                        # Only count real disks (not partitions - those have numbers at end)
+                        device_name = parts[2]
+                        if not device_name[-1].isdigit() or device_name.startswith("nvme"):
+                            ios_in_progress = int(parts[11])
+                            total_ios += ios_in_progress
+            return total_ios
+        except (FileNotFoundError, PermissionError, ValueError):
+            return 0
+
     def on_step_end(self, args, state, control, **kwargs):
-        """Check memory pressure after each step"""
+        """Check memory pressure and I/O queue after each step"""
         if not PSUTIL_AVAILABLE:
             return control
 
+        # Check memory
         mem_usage = self._get_memory_usage()
         if mem_usage > self.threshold:
             logger.warning(
@@ -73,6 +99,20 @@ class MemoryPressureCallback(TrainerCallback):
                 logger.info(f"Memory usage: {mem_usage:.1%}, waiting...")
             logger.info(f"Memory usage {mem_usage:.1%} below threshold, resuming")
 
+        # Check I/O queue
+        if self.io_queue_threshold > 0:
+            io_queue = self._get_io_queue_depth()
+            if io_queue > self.io_queue_threshold:
+                logger.warning(
+                    f"Step {state.global_step}: I/O queue {io_queue} exceeds "
+                    f"threshold {self.io_queue_threshold}, pausing..."
+                )
+                while io_queue > self.io_queue_threshold:
+                    time.sleep(self.check_interval)
+                    io_queue = self._get_io_queue_depth()
+                    logger.info(f"I/O queue: {io_queue}, waiting...")
+                logger.info(f"I/O queue {io_queue} below threshold, resuming")
+
         return control
 
 
@@ -83,6 +123,7 @@ class FinetuneTrainer(Trainer):
         template_args=None,
         training_logger=None,
         memory_pressure_threshold: float = 0.8,
+        io_queue_threshold: int = 30,
         *args,
         **kwargs,
     ):
@@ -106,7 +147,12 @@ class FinetuneTrainer(Trainer):
 
         # Add memory pressure callback (set threshold to 0 or None to disable)
         if memory_pressure_threshold and memory_pressure_threshold > 0:
-            self.add_callback(MemoryPressureCallback(threshold=memory_pressure_threshold))
+            self.add_callback(
+                MemoryPressureCallback(
+                    threshold=memory_pressure_threshold,
+                    io_queue_threshold=io_queue_threshold,
+                )
+            )
 
     def evaluate(
         self,
