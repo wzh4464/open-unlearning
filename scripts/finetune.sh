@@ -51,15 +51,15 @@ RESUME_ARG=""
 if [ -n "$RESUME_PATH" ]; then
     if [ "$RESUME_PATH" = "auto" ]; then
         # Auto-find the latest checkpoint
-        LATEST_CKPT=$(ls -td saves/train/${TASK_NAME}/checkpoint-* 2>/dev/null | head -1)
+        LATEST_CKPT=$(ls -td saves/finetune/${TASK_NAME}/checkpoint-* 2>/dev/null | head -1)
         if [ -n "$LATEST_CKPT" ]; then
-            RESUME_ARG="trainer.args.resume_from_checkpoint=${LATEST_CKPT}"
+            RESUME_ARG="+trainer.args.resume_from_checkpoint=${LATEST_CKPT}"
             echo "Auto-resuming from: ${LATEST_CKPT}"
         else
             echo "Warning: No checkpoint found for auto-resume, starting fresh"
         fi
     else
-        RESUME_ARG="trainer.args.resume_from_checkpoint=${RESUME_PATH}"
+        RESUME_ARG="+trainer.args.resume_from_checkpoint=${RESUME_PATH}"
         echo "Resuming from: ${RESUME_PATH}"
     fi
 fi

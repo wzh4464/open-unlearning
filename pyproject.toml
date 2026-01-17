@@ -21,6 +21,7 @@ dependencies = [
     "ninja>=1.13.0",
     "packaging>=25.0",
     "flash-attn>=2.8.3",
+    "psutil>=7.2.1",
 ]
 
 [project.optional-dependencies]

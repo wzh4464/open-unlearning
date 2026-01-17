@@ -5,11 +5,18 @@ from typing import Dict, List, Optional, Union
 import os
 import logging
 import warnings
+import time
 import torch
 from transformers import Trainer, TrainerCallback
 from torch.utils.data import Dataset
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
 from typing import Any
+
+try:
+    import psutil
+    PSUTIL_AVAILABLE = True
+except ImportError:
+    PSUTIL_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +36,55 @@ class EpochEndCallback(TrainerCallback):
         return control
 
 
+class MemoryPressureCallback(TrainerCallback):
+    """Callback to pause training when memory pressure exceeds threshold"""
+
+    def __init__(self, threshold: float = 0.8, check_interval: float = 5.0):
+        """
+        Args:
+            threshold: Memory usage threshold (0.0-1.0) to trigger pause
+            check_interval: Seconds to wait between memory checks when paused
+        """
+        self.threshold = threshold
+        self.check_interval = check_interval
+        if not PSUTIL_AVAILABLE:
+            logger.warning("psutil not available, MemoryPressureCallback disabled")
+
+    def _get_memory_usage(self) -> float:
+        """Get current memory usage as a fraction (0.0-1.0)"""
+        if not PSUTIL_AVAILABLE:
+            return 0.0
+        return psutil.virtual_memory().percent / 100.0
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Check memory pressure after each step"""
+        if not PSUTIL_AVAILABLE:
+            return control
+
+        mem_usage = self._get_memory_usage()
+        if mem_usage > self.threshold:
+            logger.warning(
+                f"Step {state.global_step}: Memory usage {mem_usage:.1%} exceeds "
+                f"threshold {self.threshold:.0%}, pausing..."
+            )
+            while mem_usage > self.threshold:
+                time.sleep(self.check_interval)
+                mem_usage = self._get_memory_usage()
+                logger.info(f"Memory usage: {mem_usage:.1%}, waiting...")
+            logger.info(f"Memory usage {mem_usage:.1%} below threshold, resuming")
+
+        return control
+
+
 class FinetuneTrainer(Trainer):
     def __init__(
-        self, evaluators=None, template_args=None, training_logger=None, *args, **kwargs
+        self,
+        evaluators=None,
+        template_args=None,
+        training_logger=None,
+        memory_pressure_threshold: float = 0.8,
+        *args,
+        **kwargs,
     ):
         self.evaluators = evaluators
         self.template_args = template_args
@@ -50,6 +103,10 @@ class FinetuneTrainer(Trainer):
         # Add epoch end callback if training_logger is enabled
         if training_logger is not None:
             self.add_callback(EpochEndCallback(training_logger))
+
+        # Add memory pressure callback (set threshold to 0 or None to disable)
+        if memory_pressure_threshold and memory_pressure_threshold > 0:
+            self.add_callback(MemoryPressureCallback(threshold=memory_pressure_threshold))
 
     def evaluate(
         self,
