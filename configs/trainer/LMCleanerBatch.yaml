@@ -33,6 +33,11 @@ method_args:
   # H ← H + λI
   damping: 1e-4
 
+  # 最大步数 (用于epoch-based评估)
+  # 设置后只考虑 <= max_step 的训练步骤
+  # null 表示使用训练日志中的最终步数
+  max_step: null
+
   # 是否在初始化时立即应用遗忘
   # True: 在trainer初始化时就应用遗忘
   # False: 在train()调用时应用遗忘
