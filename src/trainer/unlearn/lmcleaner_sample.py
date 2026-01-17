@@ -84,11 +84,11 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         if self.audit_dir:
             self.audit_dir.mkdir(parents=True, exist_ok=True)
 
-        # 加载训练日志
+        # 加载训练日志 (需要加载tensor数据用于遗忘计算)
         self.training_logger = TrainingLogger(
             log_dir=str(self.training_log_dir), mode="sample"
         )
-        self.training_logger.load_from_disk()
+        self.training_logger.load_from_disk(load_tensors=True)
 
         # 创建批次重建器(用于轻存储模式)
         self.batch_reconstructor = None

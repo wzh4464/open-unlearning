@@ -78,9 +78,9 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         if self.audit_dir:
             self.audit_dir.mkdir(parents=True, exist_ok=True)
 
-        # 加载训练日志
+        # 加载训练日志 (需要加载tensor数据用于遗忘计算)
         self.training_logger = TrainingLogger(log_dir=str(self.training_log_dir))
-        self.training_logger.load_from_disk()
+        self.training_logger.load_from_disk(load_tensors=True)
 
         # 创建批次重建器(用于轻存储模式)
         # 注意: dataset和data_collator会在train()方法中设置
@@ -366,9 +366,9 @@ def run_lmcleaner_batch_unlearning(
     Returns:
         遗忘后的模型
     """
-    # 加载训练日志
+    # 加载训练日志 (需要加载tensor数据用于遗忘计算)
     training_logger = TrainingLogger(log_dir=training_log_dir)
-    training_logger.load_from_disk()
+    training_logger.load_from_disk(load_tensors=True)
 
     # 获取forget步骤
     forget_steps = []

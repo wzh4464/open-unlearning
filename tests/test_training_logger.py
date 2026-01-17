@@ -185,9 +185,11 @@ class TestStepRegistration:
 
     def test_register_multiple_steps(self, temp_log_dir):
         """Test registering multiple steps"""
-        logger = TrainingLogger(log_dir=str(temp_log_dir))
+        # Use save_interval > 10 to avoid buffer clearing during registration
+        # Start from step 1 to avoid triggering save at step 0 (0 % N == 0)
+        logger = TrainingLogger(log_dir=str(temp_log_dir), save_interval=20)
 
-        for i in range(10):
+        for i in range(1, 11):  # Steps 1-10
             u = torch.randn(100)
             logger.register_step(
                 step_id=i,
@@ -196,7 +198,7 @@ class TestStepRegistration:
                 u=u
             )
 
-        assert logger.current_step == 9
+        assert logger.current_step == 10
         assert len(logger.step_log.buffer) == 10
 
 
@@ -286,9 +288,9 @@ class TestSaveLoad:
         assert (temp_log_dir / "meta.json").exists()
 
     def test_load_from_disk(self, temp_log_dir):
-        """Test loading from disk"""
-        # Create and save logger
-        logger1 = TrainingLogger(log_dir=str(temp_log_dir))
+        """Test loading from disk with tensors"""
+        # Create and save logger (use save_interval > 5 to avoid buffer clearing)
+        logger1 = TrainingLogger(log_dir=str(temp_log_dir), save_interval=10)
 
         for i in range(5):
             u = torch.randn(100)
@@ -301,14 +303,39 @@ class TestSaveLoad:
 
         logger1.save_to_disk()
 
-        # Create new logger and load
+        # Create new logger and load with tensors (for verification)
         logger2 = TrainingLogger(log_dir=str(temp_log_dir))
-        logger2.load_from_disk()
+        logger2.load_from_disk(load_tensors=True)
 
-        # Verify data was loaded
+        # Verify data was loaded when load_tensors=True
         assert len(logger2.step_log.buffer) == 5
         for i in range(5):
             assert logger2.step_log.get(i) is not None
+
+    def test_load_from_disk_metadata_only(self, temp_log_dir):
+        """Test loading from disk without tensors (memory-efficient resume)"""
+        # Create and save logger
+        logger1 = TrainingLogger(log_dir=str(temp_log_dir), save_interval=10)
+
+        for i in range(5):
+            u = torch.randn(100)
+            logger1.register_step(
+                step_id=i,
+                batch_id=f"batch_{i}",
+                eta=0.01,
+                u=u
+            )
+
+        logger1.save_to_disk()
+
+        # Create new logger and load without tensors (default, for resume)
+        logger2 = TrainingLogger(log_dir=str(temp_log_dir))
+        logger2.load_from_disk()  # load_tensors=False by default
+
+        # Verify metadata was restored but buffer is empty (memory efficient)
+        assert logger2.current_step == 4
+        assert logger2._last_saved_step_id == 4
+        assert len(logger2.step_log.buffer) == 0  # No tensors loaded
 
     def test_load_nonexistent_directory(self):
         """Test loading from nonexistent directory"""
@@ -337,13 +364,13 @@ class TestSaveLoad:
 
         logger.save_to_disk()
 
-        # Load and verify
+        # Load with tensors to verify the saved data
         logger2 = TrainingLogger(log_dir=str(temp_log_dir))
-        logger2.load_from_disk()
+        logger2.load_from_disk(load_tensors=True)
 
-        # After save_to_disk(), only indices from before the last automatic save are cleared
-        # With save_interval=10, automatic save happens at step 0
-        # Steps 1-4 are added after that, so their indices remain
+        # After save_to_disk(), indices are cleared (memory-efficient behavior)
+        # When loading with load_tensors=True, we reload them
+        # The final save includes all remaining indices (steps 1-4 after step 0 auto-save)
         assert len(logger2.sample_indices_per_step) == 4
 
 
@@ -457,9 +484,9 @@ class TestIntegration:
 
         logger1.save_to_disk()
 
-        # Phase 2: Load for unlearning
+        # Phase 2: Load for unlearning (with load_tensors=True to access data)
         logger2 = TrainingLogger(log_dir=str(temp_log_dir))
-        logger2.load_from_disk()
+        logger2.load_from_disk(load_tensors=True)
 
         # Verify loaded data
         assert len(logger2.step_log.buffer) == 10

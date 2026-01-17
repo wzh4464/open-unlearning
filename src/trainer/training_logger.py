@@ -225,6 +225,18 @@ class TrainingLogger:
                 f"Pruned {len(keys_to_remove)} old entries from rng_states_per_step"
             )
 
+        # Prune batch_index to prevent unbounded growth
+        # batch_index maps batch_id -> step_id, and can grow indefinitely
+        if len(self.batch_index) > max_entries:
+            # Sort by step_id (value) and keep only the most recent entries
+            sorted_items = sorted(self.batch_index.items(), key=lambda x: x[1])
+            keys_to_remove = [k for k, v in sorted_items[:-max_entries]]
+            for key in keys_to_remove:
+                del self.batch_index[key]
+            logger.debug(
+                f"Pruned {len(keys_to_remove)} old entries from batch_index"
+            )
+
     def register_step(
         self,
         step_id: int,
@@ -594,16 +606,25 @@ class TrainingLogger:
         self.prev_params = None
         logger.debug("Cleared prev_params after saving")
 
+        # Clear step_log buffer and step_map to prevent unbounded memory growth
+        # Data is now safely on disk, no need to keep in memory
+        self.step_log.buffer.clear()
+        if hasattr(self.step_log, 'step_map'):
+            self.step_log.step_map.clear()
+        logger.debug("Cleared step_log buffer after saving")
+
         # Force Python garbage collection to reclaim memory
         gc.collect()
         logger.debug("Forced garbage collection after saving")
 
-    def load_from_disk(self, step_id: Optional[int] = None):
+    def load_from_disk(self, step_id: Optional[int] = None, load_tensors: bool = False):
         """
         从磁盘加载日志
 
         Args:
             step_id: 要加载的步骤ID(如果为None,加载最新的)
+            load_tensors: 是否加载历史tensor数据到内存(默认False以节省内存)
+                          设为False时只恢复元数据和状态,历史数据保持在磁盘上
         """
         # 加载元信息
         meta_file = self.log_dir / "meta.json"
@@ -626,11 +647,34 @@ class TrainingLogger:
         self.current_epoch = meta.get("current_epoch", 0)
         self.epoch_end_steps = meta.get("epoch_end_steps", [])
 
-        # 加载批次索引
+        # 恢复当前步数和保存状态
+        self.current_step = meta.get("current_step", 0)
+        # Mark all historical data as already saved - this is critical to prevent re-saving
+        self._last_saved_step_id = self.current_step
+
+        # 加载批次索引 (small, needed for operation)
+        # Note: For very long training runs, batch_index can grow large.
+        # It's kept for backward compatibility but pruned periodically.
         index_file = self.log_dir / "batch_index.json"
         if index_file.exists():
             with open(index_file, "r") as f:
                 self.batch_index = json.load(f)
+
+        # Clear step_log - historical data is already on disk, no need to load into memory
+        # This prevents memory explosion when resuming after many steps
+        self.step_log.clear()
+        if hasattr(self.step_log, 'step_map'):
+            self.step_log.step_map.clear()
+
+        # Only load tensors if explicitly requested (for analysis/debugging)
+        if not load_tensors:
+            logger.info(
+                f"Resumed training logger from {self.log_dir}, "
+                f"current_step={self.current_step}, skipping tensor loading to save memory"
+            )
+            return
+
+        # Below: only executed if load_tensors=True (for backward compatibility or debugging)
 
         # 加载样本索引(轻存储模式)
         indices_file = self.log_dir / "sample_indices.json"
@@ -658,8 +702,6 @@ class TrainingLogger:
 
         # 检查是否使用增量保存格式
         is_incremental = meta.get("incremental_save", False)
-
-        self.step_log.clear()
 
         if is_incremental:
             # 增量保存格式: 加载所有 chunk 文件
@@ -718,8 +760,6 @@ class TrainingLogger:
                 logger.warning(f"Corrupted records file {records_file}: {e}, skipping")
                 records_file.unlink()
                 logger.info(f"Removed corrupted file: {records_file}")
-
-        self.current_step = meta.get("current_step", 0)
 
         logger.info(
             f"Loaded training log from {self.log_dir}, {len(self.step_log.buffer)} records"
