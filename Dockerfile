@@ -2,10 +2,13 @@ FROM pytorch/pytorch:2.9.1-cuda12.6-cudnn9-devel
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System dependencies + python symlink
+# System dependencies + ensure conda is in PATH for all shells
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget unzip git tmux curl openssh-client openssh-server && \
-    ln -sf /usr/bin/python3 /usr/bin/python && \
+    echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/profile.d/conda.sh && \
+    echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/bash.bashrc && \
+    ln -sf /opt/conda/bin/python /usr/bin/python && \
+    ln -sf /opt/conda/bin/python /usr/bin/python3 && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 WORKDIR /app
@@ -15,19 +18,19 @@ COPY pyproject.toml ./
 
 # Install dependencies directly to system Python
 RUN pip install --no-cache-dir \
-    accelerate>=1.11.0 \
-    datasets>=4.3.0 \
-    hydra-colorlog>=1.2.0 \
-    hydra-core>=1.3.2 \
-    lm-eval>=0.4.9 \
-    rouge-score>=0.1.2 \
-    scikit-learn>=1.7.2 \
-    scipy>=1.16.2 \
-    tensorboard>=2.20.0 \
-    transformers>=4.57.1 \
-    deepspeed>=0.18.4 \
-    ninja>=1.13.0 \
-    packaging>=25.0
+    "accelerate>=1.11.0" \
+    "datasets>=4.3.0" \
+    "hydra-colorlog>=1.2.0" \
+    "hydra-core>=1.3.2" \
+    "lm-eval>=0.4.9" \
+    "rouge-score>=0.1.2" \
+    "scikit-learn>=1.7.2" \
+    "scipy>=1.16.2" \
+    "tensorboard>=2.20.0" \
+    "transformers>=4.57.1" \
+    "deepspeed>=0.18.4" \
+    "ninja>=1.13.0" \
+    "packaging>=25.0"
 
 # Build flash-attn from source (needs torch visible)
 RUN pip install flash-attn==2.8.3 --no-build-isolation
