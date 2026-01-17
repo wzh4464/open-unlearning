@@ -95,6 +95,10 @@ $PYTHON_CMD src/train.py --config-name=train.yaml \
     +trainer.args.training_logger.save_rng_state=true \
     +trainer.args.training_logger.steps_per_epoch=${STEPS_PER_EPOCH} \
     +trainer.args.training_logger.save_at_epoch_end=true \
+    +trainer.args.spectral_norm.enabled=true \
+    +trainer.args.spectral_norm.interval=50 \
+    +trainer.args.spectral_norm.num_power_iters=20 \
+    +trainer.args.spectral_norm.output_dir="${LOG_DIR}" \
     ${RESUME_ARG:+$RESUME_ARG} \
     task_name="${TASK_NAME}"
 

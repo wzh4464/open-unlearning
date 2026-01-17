@@ -601,3 +601,320 @@ class EfficiencyTracker(TrainerCallback):
             checkpoint_time,
             "=" * 50,
         )
+
+
+def compute_hvp_for_batch(
+    model: nn.Module,
+    batch: dict,
+    v: torch.Tensor,
+    params: list = None,
+) -> torch.Tensor:
+    """
+    Compute Hessian-vector product using GGN approximation.
+
+    H ≈ J^T J where J is the Jacobian of log-probabilities.
+    HVP is computed as: J^T (J v)
+
+    Args:
+        model: The model
+        batch: Input batch dict
+        v: Vector to multiply with Hessian
+        params: List of parameters (if None, uses all trainable params)
+
+    Returns:
+        Hessian-vector product
+    """
+    if params is None:
+        params = [p for p in model.parameters() if p.requires_grad]
+
+    model.zero_grad()
+
+    # Forward pass
+    outputs = model(**batch)
+    logits = outputs.logits
+    labels = batch.get("labels", batch.get("input_ids"))
+
+    # Compute log-softmax probabilities
+    log_probs = F.log_softmax(logits, dim=-1)
+
+    # Flatten for Jacobian computation
+    log_probs_flat = log_probs.view(-1, log_probs.size(-1))
+    labels_flat = labels.view(-1)
+
+    # Select relevant log-probs (ignore padding)
+    mask = labels_flat != -100
+    if mask.sum() == 0:
+        return torch.zeros_like(v)
+
+    selected_log_probs = log_probs_flat[mask]
+    selected_labels = labels_flat[mask]
+
+    # Get log-prob of correct tokens
+    correct_log_probs = selected_log_probs.gather(1, selected_labels.unsqueeze(1)).squeeze()
+
+    # First backward: compute Jv
+    # We need gradients of log_probs w.r.t. params, then dot with v
+    param_shapes = [p.shape for p in params]
+    param_numels = [p.numel() for p in params]
+
+    # Reshape v to match params
+    v_params = []
+    offset = 0
+    for numel, shape in zip(param_numels, param_shapes):
+        v_params.append(v[offset:offset + numel].view(shape))
+        offset += numel
+
+    # Compute Jv via forward-mode AD approximation
+    # We use the trick: Jv ≈ (f(θ + εv) - f(θ)) / ε for small ε
+    eps = 1e-4
+
+    # Save original params
+    original_params = [p.data.clone() for p in params]
+
+    # Perturb params: θ + εv
+    with torch.no_grad():
+        for p, vp in zip(params, v_params):
+            p.data.add_(vp, alpha=eps)
+
+    # Forward with perturbed params
+    outputs_pert = model(**batch)
+    log_probs_pert = F.log_softmax(outputs_pert.logits, dim=-1)
+    log_probs_pert_flat = log_probs_pert.view(-1, log_probs_pert.size(-1))
+    selected_log_probs_pert = log_probs_pert_flat[mask]
+    correct_log_probs_pert = selected_log_probs_pert.gather(1, selected_labels.unsqueeze(1)).squeeze()
+
+    # Restore original params
+    with torch.no_grad():
+        for p, orig in zip(params, original_params):
+            p.data.copy_(orig)
+
+    # Jv ≈ (f(θ+εv) - f(θ)) / ε
+    Jv = (correct_log_probs_pert - correct_log_probs) / eps
+
+    # Second step: compute J^T (Jv) via backward
+    model.zero_grad()
+
+    # Recompute forward
+    outputs = model(**batch)
+    log_probs = F.log_softmax(outputs.logits, dim=-1)
+    log_probs_flat = log_probs.view(-1, log_probs.size(-1))
+    selected_log_probs = log_probs_flat[mask]
+    correct_log_probs = selected_log_probs.gather(1, selected_labels.unsqueeze(1)).squeeze()
+
+    # Backward with Jv as grad_output
+    correct_log_probs.backward(Jv.detach())
+
+    # Collect gradients
+    hvp_parts = []
+    for p in params:
+        if p.grad is not None:
+            hvp_parts.append(p.grad.view(-1).clone())
+        else:
+            hvp_parts.append(torch.zeros(p.numel(), device=v.device, dtype=v.dtype))
+
+    hvp = torch.cat(hvp_parts)
+    model.zero_grad()
+
+    return hvp
+
+
+def estimate_spectral_norm_power_iter(
+    model: nn.Module,
+    batch: dict,
+    eta: float,
+    params: list = None,
+    num_iters: int = 20,
+    device: str = "cuda",
+) -> tuple:
+    """
+    Estimate ||I - η*H||_2 using power iteration.
+
+    Args:
+        model: The model
+        batch: Input batch
+        eta: Learning rate
+        params: List of parameters
+        num_iters: Number of power iterations
+        device: Device for computation
+
+    Returns:
+        (spectral_norm, lambda_max_estimate)
+    """
+    if params is None:
+        params = [p for p in model.parameters() if p.requires_grad]
+
+    dtype = next(model.parameters()).dtype
+    num_params = sum(p.numel() for p in params)
+
+    # Initialize random vector
+    v = torch.randn(num_params, device=device, dtype=dtype)
+    v = v / v.norm()
+
+    model.eval()
+
+    try:
+        for _ in range(num_iters):
+            # Compute Hv
+            Hv = compute_hvp_for_batch(model, batch, v, params)
+
+            # P = I - η*H, so Pv = v - η*Hv
+            Pv = v - eta * Hv
+
+            # Normalize
+            Pv_norm = Pv.norm()
+            if Pv_norm > 1e-10:
+                v = Pv / Pv_norm
+
+        # Final estimate
+        Hv = compute_hvp_for_batch(model, batch, v, params)
+        Pv = v - eta * Hv
+        spectral_norm = Pv.norm().item()
+
+        # Estimate λ_max of H
+        lambda_est = Hv.norm().item()
+
+        return spectral_norm, lambda_est
+
+    except Exception as e:
+        logger.warning(f"Error in spectral norm estimation: {e}")
+        return None, None
+
+    finally:
+        model.train()
+
+
+class SpectralNormCallback(TrainerCallback):
+    """
+    Callback to compute spectral norms of the propagation operator during training.
+
+    Computes ||P^[t]||_2 = ||I - η*H^[t]||_2 periodically to verify contraction property.
+
+    Args:
+        interval: Number of steps between spectral norm computations
+        num_power_iters: Number of power iterations for estimation
+        output_dir: Directory to save spectral norm data
+        enabled: Whether the callback is enabled
+    """
+
+    def __init__(
+        self,
+        interval: int = 100,
+        num_power_iters: int = 20,
+        output_dir: str = None,
+        enabled: bool = True,
+    ):
+        self.interval = interval
+        self.num_power_iters = num_power_iters
+        self.output_dir = Path(output_dir) if output_dir else None
+        self.enabled = enabled
+
+        # Results storage
+        self.spectral_norms = {}  # step -> spectral_norm
+        self.lambda_maxs = {}  # step -> lambda_max estimate
+        self.etas = {}  # step -> learning rate
+
+        if self.output_dir:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        """Compute spectral norm at specified intervals"""
+        if not self.enabled:
+            return
+
+        if state.global_step == 0 or state.global_step % self.interval != 0:
+            return
+
+        trainer = kwargs.get("trainer")
+        if trainer is None or model is None:
+            return
+
+        # Get current batch from the training dataloader
+        # Note: We need to get the batch that was just used
+        # This is tricky - we'll use the last batch from inputs
+        inputs = kwargs.get("inputs")
+        if inputs is None:
+            logger.debug("No inputs available for spectral norm computation")
+            return
+
+        # Get learning rate
+        eta = trainer.optimizer.param_groups[0]["lr"]
+        self.etas[state.global_step] = eta
+
+        # Get trainable parameters
+        params = [p for p in model.parameters() if p.requires_grad]
+
+        try:
+            # Move batch to correct device
+            device = next(model.parameters()).device
+            batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in inputs.items()}
+
+            # Compute spectral norm
+            spectral_norm, lambda_max = estimate_spectral_norm_power_iter(
+                model, batch, eta, params, self.num_power_iters, device
+            )
+
+            if spectral_norm is not None:
+                self.spectral_norms[state.global_step] = spectral_norm
+                self.lambda_maxs[state.global_step] = lambda_max
+
+                # Log periodically
+                logger.info(
+                    f"Step {state.global_step}: ||P||_2 = {spectral_norm:.6f}, "
+                    f"λ_max ≈ {lambda_max:.4f}, η = {eta:.2e}"
+                )
+
+                # Check contraction
+                if spectral_norm >= 1.0:
+                    logger.warning(
+                        f"Non-contractive at step {state.global_step}: ||P||_2 = {spectral_norm:.6f}"
+                    )
+
+        except Exception as e:
+            logger.warning(f"Failed to compute spectral norm at step {state.global_step}: {e}")
+
+    def on_train_end(self, args, state, control, **kwargs):
+        """Save results at end of training"""
+        if not self.enabled or not self.spectral_norms:
+            return
+
+        results = {
+            "spectral_norms": self.spectral_norms,
+            "lambda_maxs": self.lambda_maxs,
+            "etas": self.etas,
+            "metadata": {
+                "interval": self.interval,
+                "num_power_iters": self.num_power_iters,
+                "total_measurements": len(self.spectral_norms),
+            }
+        }
+
+        # Compute statistics
+        norms = list(self.spectral_norms.values())
+        if norms:
+            results["statistics"] = {
+                "mean": sum(norms) / len(norms),
+                "min": min(norms),
+                "max": max(norms),
+                "all_contractive": all(n < 1.0 for n in norms),
+                "contraction_rate": sum(1 for n in norms if n < 1.0) / len(norms),
+            }
+            logger.info(
+                f"Spectral norm statistics: mean={results['statistics']['mean']:.4f}, "
+                f"range=[{results['statistics']['min']:.4f}, {results['statistics']['max']:.4f}], "
+                f"all_contractive={results['statistics']['all_contractive']}"
+            )
+
+        # Save to file
+        if self.output_dir:
+            output_file = self.output_dir / "spectral_norms.json"
+            with open(output_file, "w") as f:
+                # Convert int keys to strings for JSON
+                json_results = {
+                    "spectral_norms": {str(k): v for k, v in self.spectral_norms.items()},
+                    "lambda_maxs": {str(k): v for k, v in self.lambda_maxs.items()},
+                    "etas": {str(k): v for k, v in self.etas.items()},
+                    "metadata": results["metadata"],
+                    "statistics": results.get("statistics", {}),
+                }
+                json.dump(json_results, f, indent=2)
+            logger.info(f"Saved spectral norm data to {output_file}")

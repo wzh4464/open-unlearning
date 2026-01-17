@@ -5,7 +5,7 @@ from transformers import Trainer, TrainingArguments
 
 from trainer.base import FinetuneTrainer
 from trainer.training_logger import TrainingLogger
-from trainer.utils import CudaCacheCallback, EfficiencyTracker
+from trainer.utils import CudaCacheCallback, EfficiencyTracker, SpectralNormCallback
 from trainer.unlearn.grad_ascent import GradAscent
 from trainer.unlearn.grad_diff import GradDiff
 from trainer.unlearn.npo import NPO
@@ -41,6 +41,9 @@ def load_trainer_args(trainer_args: DictConfig, dataset):
 
     # Remove efficiency_tracking config as it's not a TrainingArguments parameter
     trainer_args.pop("efficiency_tracking", None)
+
+    # Remove spectral_norm config as it's not a TrainingArguments parameter
+    trainer_args.pop("spectral_norm", None)
 
     if warmup_epochs:
         batch_size = trainer_args["per_device_train_batch_size"]
@@ -159,6 +162,43 @@ def load_trainer(
         else:
             logger.info(
                 "Skipping EfficiencyTracker initialization on non-main process (distributed training)"
+            )
+
+    # Initialize SpectralNormCallback if configured
+    spectral_cfg = trainer_cfg.args.get("spectral_norm", None)
+    if spectral_cfg and spectral_cfg.get("enabled", False):
+        # Only initialize on main process to avoid multi-rank file writes
+        is_main_process = True
+        try:
+            import torch.distributed as dist
+
+            if dist.is_available() and dist.is_initialized():
+                is_main_process = dist.get_rank() == 0
+        except Exception:
+            is_main_process = True
+
+        if is_main_process:
+            spectral_output_dir = spectral_cfg.get(
+                "output_dir", str(trainer_args.output_dir)
+            )
+            spectral_interval = spectral_cfg.get("interval", 100)
+            spectral_power_iters = spectral_cfg.get("num_power_iters", 20)
+
+            logger.info(
+                f"Initializing SpectralNormCallback: interval={spectral_interval}, "
+                f"power_iters={spectral_power_iters}"
+            )
+            callbacks.append(
+                SpectralNormCallback(
+                    interval=spectral_interval,
+                    num_power_iters=spectral_power_iters,
+                    output_dir=spectral_output_dir,
+                    enabled=True,
+                )
+            )
+        else:
+            logger.info(
+                "Skipping SpectralNormCallback initialization on non-main process"
             )
 
     trainer = trainer_cls(
