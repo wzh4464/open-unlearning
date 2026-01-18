@@ -705,15 +705,23 @@ class TrainingLogger:
         with open(index_file, "w") as f:
             json.dump(self.batch_index, f, indent=2)
 
-        # 保存样本索引(轻存储模式)
+        # 保存样本索引(轻存储模式) - 增量追加模式
         if self.save_indices_only and self.sample_indices_per_step:
             indices_file = self.log_dir / "sample_indices.json"
-            # Convert int keys to strings for JSON serialization
-            serializable_indices = {
-                str(k): v for k, v in self.sample_indices_per_step.items()
-            }
+            # Load existing indices if file exists
+            existing_indices = {}
+            if indices_file.exists():
+                try:
+                    with open(indices_file, "r") as f:
+                        existing_indices = json.load(f)
+                except (json.JSONDecodeError, IOError):
+                    existing_indices = {}
+            # Merge with new indices
+            for k, v in self.sample_indices_per_step.items():
+                existing_indices[str(k)] = v
+            # Write merged indices
             with open(indices_file, "w") as f:
-                json.dump(serializable_indices, f, indent=2)
+                json.dump(existing_indices, f, indent=2)
 
         # 保存RNG状态(用于批次重建)
         if self.save_rng_state and self.rng_states_per_step:

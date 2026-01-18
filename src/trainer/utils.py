@@ -816,7 +816,7 @@ class SpectralNormCallback(TrainerCallback):
         if self.output_dir:
             self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def on_step_end(self, args, state, control, model=None, **kwargs):
+    def on_step_end(self, args, state, control, model=None, train_dataloader=None, optimizer=None, **kwargs):
         """Compute spectral norm at specified intervals"""
         if not self.enabled:
             return
@@ -824,29 +824,36 @@ class SpectralNormCallback(TrainerCallback):
         if state.global_step == 0 or state.global_step % self.interval != 0:
             return
 
-        trainer = kwargs.get("trainer")
-        if trainer is None or model is None:
+        if model is None:
             return
 
-        # Get current batch from the training dataloader
-        # Note: We need to get the batch that was just used
-        # This is tricky - we'll use the last batch from inputs
-        inputs = kwargs.get("inputs")
-        if inputs is None:
-            logger.debug("No inputs available for spectral norm computation")
+        # Get a batch from train_dataloader
+        if train_dataloader is None:
+            logger.debug("No train_dataloader available for spectral norm computation")
             return
 
-        # Get learning rate
-        eta = trainer.optimizer.param_groups[0]["lr"]
+        # Get learning rate from optimizer
+        if optimizer is None:
+            logger.debug("No optimizer available for spectral norm computation")
+            return
+
+        eta = optimizer.param_groups[0]["lr"]
         self.etas[state.global_step] = eta
 
         # Get trainable parameters
         params = [p for p in model.parameters() if p.requires_grad]
 
         try:
-            # Move batch to correct device
+            # Get a batch from the dataloader
+            # We use an iterator to get one batch
             device = next(model.parameters()).device
-            batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in inputs.items()}
+
+            # Create a temporary iterator to get one batch
+            batch_iterator = iter(train_dataloader)
+            batch = next(batch_iterator)
+
+            # Move batch to correct device
+            batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
 
             # Compute spectral norm
             spectral_norm, lambda_max = estimate_spectral_norm_power_iter(
@@ -869,6 +876,8 @@ class SpectralNormCallback(TrainerCallback):
                         f"Non-contractive at step {state.global_step}: ||P||_2 = {spectral_norm:.6f}"
                     )
 
+        except StopIteration:
+            logger.warning(f"DataLoader exhausted at step {state.global_step}")
         except Exception as e:
             logger.warning(f"Failed to compute spectral norm at step {state.global_step}: {e}")
 

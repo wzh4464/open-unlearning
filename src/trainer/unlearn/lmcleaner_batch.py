@@ -340,11 +340,14 @@ class LMCleanerBatchLevel(UnlearnTrainer):
 
         return (loss, None) if return_outputs else loss
 
-    def train(self):
+    def train(self, resume_from_checkpoint=None):
         """
         重写训练方法
 
         在训练开始前应用遗忘,然后可选地在retain数据上微调
+
+        Args:
+            resume_from_checkpoint: 兼容父类接口，LMCleaner 不使用此参数
         """
         # 应用遗忘(如果尚未应用)
         if not self.unlearning_applied:
@@ -353,7 +356,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # 如果有retain数据且需要微调,调用父类训练
         if hasattr(self.train_dataset, "retain_dataset"):
             logger.info("Fine-tuning on retain data...")
-            return super().train()
+            return super().train(resume_from_checkpoint=resume_from_checkpoint)
         else:
             logger.info("No retain data, skipping training")
             # 返回空的训练结果
