@@ -629,10 +629,14 @@ def compute_hvp_for_batch(
 
     model.zero_grad()
 
-    # Forward pass
-    outputs = model(**batch)
-    logits = outputs.logits
+    # Filter out non-model keys (e.g., "index" from DataCollatorWithIndex)
+    model_keys = {"input_ids", "attention_mask", "labels", "token_type_ids", "position_ids"}
+    model_batch = {k: v for k, v in batch.items() if k in model_keys}
     labels = batch.get("labels", batch.get("input_ids"))
+
+    # Forward pass
+    outputs = model(**model_batch)
+    logits = outputs.logits
 
     # Compute log-softmax probabilities
     log_probs = F.log_softmax(logits, dim=-1)
@@ -671,31 +675,33 @@ def compute_hvp_for_batch(
     # Save original params
     original_params = [p.data.clone() for p in params]
 
-    # Perturb params: θ + εv
-    with torch.no_grad():
-        for p, vp in zip(params, v_params):
-            p.data.add_(vp, alpha=eps)
+    try:
+        # Perturb params: θ + εv
+        with torch.no_grad():
+            for p, vp in zip(params, v_params):
+                p.data.add_(vp, alpha=eps)
 
-    # Forward with perturbed params
-    outputs_pert = model(**batch)
-    log_probs_pert = F.log_softmax(outputs_pert.logits, dim=-1)
-    log_probs_pert_flat = log_probs_pert.view(-1, log_probs_pert.size(-1))
-    selected_log_probs_pert = log_probs_pert_flat[mask]
-    correct_log_probs_pert = selected_log_probs_pert.gather(1, selected_labels.unsqueeze(1)).squeeze()
+        # Forward with perturbed params
+        outputs_pert = model(**model_batch)
+        log_probs_pert = F.log_softmax(outputs_pert.logits, dim=-1)
+        log_probs_pert_flat = log_probs_pert.view(-1, log_probs_pert.size(-1))
+        selected_log_probs_pert = log_probs_pert_flat[mask]
+        correct_log_probs_pert = selected_log_probs_pert.gather(1, selected_labels.unsqueeze(1)).squeeze()
 
-    # Restore original params
-    with torch.no_grad():
-        for p, orig in zip(params, original_params):
-            p.data.copy_(orig)
+        # Jv ≈ (f(θ+εv) - f(θ)) / ε
+        Jv = (correct_log_probs_pert - correct_log_probs) / eps
 
-    # Jv ≈ (f(θ+εv) - f(θ)) / ε
-    Jv = (correct_log_probs_pert - correct_log_probs) / eps
+    finally:
+        # Always restore original params
+        with torch.no_grad():
+            for p, orig in zip(params, original_params):
+                p.data.copy_(orig)
 
     # Second step: compute J^T (Jv) via backward
     model.zero_grad()
 
     # Recompute forward
-    outputs = model(**batch)
+    outputs = model(**model_batch)
     log_probs = F.log_softmax(outputs.logits, dim=-1)
     log_probs_flat = log_probs.view(-1, log_probs.size(-1))
     selected_log_probs = log_probs_flat[mask]
@@ -844,13 +850,27 @@ class SpectralNormCallback(TrainerCallback):
         params = [p for p in model.parameters() if p.requires_grad]
 
         try:
-            # Get a batch from the dataloader
-            # We use an iterator to get one batch
             device = next(model.parameters()).device
 
-            # Create a temporary iterator to get one batch
-            batch_iterator = iter(train_dataloader)
-            batch = next(batch_iterator)
+            # Sample a random batch from the dataset directly to avoid
+            # interfering with training's dataloader iteration order
+            dataset = train_dataloader.dataset
+            batch_size = train_dataloader.batch_size or 4
+
+            # Random sample indices
+            indices = torch.randint(0, len(dataset), (batch_size,)).tolist()
+
+            # Collate samples into a batch
+            samples = [dataset[i] for i in indices]
+            if hasattr(train_dataloader, "collate_fn") and train_dataloader.collate_fn is not None:
+                batch = train_dataloader.collate_fn(samples)
+            else:
+                # Default collation
+                batch = {
+                    k: torch.stack([s[k] for s in samples])
+                    for k in samples[0].keys()
+                    if torch.is_tensor(samples[0][k])
+                }
 
             # Move batch to correct device
             batch = {k: v.to(device) if torch.is_tensor(v) else v for k, v in batch.items()}
