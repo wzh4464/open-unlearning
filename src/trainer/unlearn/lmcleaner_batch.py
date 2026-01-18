@@ -14,6 +14,7 @@ LMCleaner Batch-Level Implementation: 批次级在线遗忘
 4. 评估遗忘效果
 """
 
+import gc
 import logging
 from pathlib import Path
 from typing import List, Optional, Any
@@ -25,10 +26,11 @@ from trainer.unlearn.base import UnlearnTrainer
 from .lmcleaner_core import (
     HVPConfig,
     AuditRecord,
+    StepRecord,
     compute_correction,
     apply_correction,
 )
-from ..training_logger import TrainingLogger, BatchReconstructor
+from ..training_logger import TrainingLogger, BatchReconstructor, LazyRecordLoader
 
 logger = logging.getLogger(__name__)
 
@@ -81,9 +83,13 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         if self.audit_dir:
             self.audit_dir.mkdir(parents=True, exist_ok=True)
 
-        # 加载训练日志 (需要加载tensor数据用于遗忘计算)
+        # 加载训练日志元数据 (不加载tensor，使用懒加载以避免内存爆炸)
         self.training_logger = TrainingLogger(log_dir=str(self.training_log_dir))
-        self.training_logger.load_from_disk(load_tensors=True)
+        self.training_logger.load_from_disk(load_tensors=False)
+
+        # 创建懒加载器用于按需加载 step records
+        self.lazy_loader = LazyRecordLoader(self.training_log_dir)
+        self.lazy_loader.build_index()
 
         # 创建批次重建器(用于轻存储模式)
         # 注意: dataset和data_collator会在train()方法中设置
@@ -162,6 +168,8 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         2. 计算参数校正向量v (前向K步传播)
         3. 应用校正: θ ← θ + v
         4. 记录审计信息
+
+        使用懒加载方式按需加载步骤数据，避免内存爆炸。
         """
         if self.unlearning_applied:
             logger.warning("Unlearning already applied, skipping")
@@ -217,17 +225,46 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         logger.info(f"Applying unlearning for {len(forget_steps)} batches")
         logger.info(f"Target step (tau): {tau}, K: {self.K}")
 
-        # 对每个forget步骤计算并应用校正
+        # 对每个forget步骤计算并应用校正(使用懒加载)
         for i, tz in enumerate(forget_steps):
             logger.info(f"Processing forget step {i + 1}/{len(forget_steps)}: tz={tz}")
 
             try:
+                # 计算需要加载的步骤范围
+                start_step = tz
+                end_step = min(tz + self.K, tau - 1)
+                needed_steps = list(range(start_step, end_step + 1))
+
+                # 按需加载这些步骤的记录 (包含 tensor 数据)
+                logger.debug(f"Loading steps {start_step} to {end_step} for tz={tz}")
+                records = self.lazy_loader.load_steps(needed_steps, include_tensors=True)
+
+                if not records:
+                    logger.warning(f"No records found for step {tz}, skipping")
+                    continue
+
+                # 创建临时的 StepLog 用于 compute_correction
+                from .lmcleaner_core import StepLog
+                temp_step_log = StepLog(max_size=len(records) + 10)
+
+                for rec_dict in records:
+                    # 转换 dict 为 StepRecord
+                    step_record = StepRecord(
+                        step_id=rec_dict["step_id"],
+                        eta=rec_dict["eta"],
+                        batch_id=rec_dict["batch_id"],
+                        u=rec_dict.get("u"),
+                        gbar=rec_dict.get("gbar"),
+                        diag_H=rec_dict.get("diag_H"),
+                    )
+                    temp_step_log.add(step_record)
+
                 # 计算参数校正向量
                 v, audit = compute_correction(
                     tz=tz,
                     tau=tau,
                     K=self.K,
-                    step_log=self.training_logger.step_log,
+                    step_log=temp_step_log,
                     cfg=self.hvp_config,
                     model=self.model,
                     loss_fn=None,  # 使用默认损失
@@ -246,6 +283,12 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                     f"K_used={audit['K_used']}, "
                     f"hvp_calls={audit['hvp_calls']}"
                 )
+
+                # 清理内存: 释放加载的记录和临时 StepLog
+                del records, temp_step_log, v
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
             except Exception as e:
                 logger.error(f"Failed to apply correction for step {tz}: {e}")
@@ -372,6 +415,8 @@ def run_lmcleaner_batch_unlearning(
     """
     运行批次级LMCleaner遗忘(独立函数)
 
+    使用懒加载方式按需加载步骤数据，避免内存爆炸。
+
     Args:
         model: 预训练模型
         training_log_dir: 训练日志目录
@@ -384,9 +429,17 @@ def run_lmcleaner_batch_unlearning(
     Returns:
         遗忘后的模型
     """
-    # 加载训练日志 (需要加载tensor数据用于遗忘计算)
-    training_logger = TrainingLogger(log_dir=training_log_dir)
-    training_logger.load_from_disk(load_tensors=True)
+    from .lmcleaner_core import StepLog
+
+    training_log_dir = Path(training_log_dir)
+
+    # 加载训练日志元数据 (不加载tensor)
+    training_logger = TrainingLogger(log_dir=str(training_log_dir))
+    training_logger.load_from_disk(load_tensors=False)
+
+    # 创建懒加载器
+    lazy_loader = LazyRecordLoader(training_log_dir)
+    lazy_loader.build_index()
 
     # 获取forget步骤
     forget_steps = []
@@ -409,15 +462,40 @@ def run_lmcleaner_batch_unlearning(
     # 参数列表
     params = [p for p in model.parameters() if p.requires_grad]
 
-    # 应用遗忘
+    # 应用遗忘(使用懒加载)
     audit_records = []
 
     for tz in forget_steps:
+        # 计算需要加载的步骤范围
+        start_step = tz
+        end_step = min(tz + K, tau - 1)
+        needed_steps = list(range(start_step, end_step + 1))
+
+        # 按需加载这些步骤的记录
+        records = lazy_loader.load_steps(needed_steps, include_tensors=True)
+
+        if not records:
+            logger.warning(f"No records found for step {tz}, skipping")
+            continue
+
+        # 创建临时的 StepLog
+        temp_step_log = StepLog(max_size=len(records) + 10)
+        for rec_dict in records:
+            step_record = StepRecord(
+                step_id=rec_dict["step_id"],
+                eta=rec_dict["eta"],
+                batch_id=rec_dict["batch_id"],
+                u=rec_dict.get("u"),
+                gbar=rec_dict.get("gbar"),
+                diag_H=rec_dict.get("diag_H"),
+            )
+            temp_step_log.add(step_record)
+
         v, audit = compute_correction(
             tz=tz,
             tau=tau,
             K=K,
-            step_log=training_logger.step_log,
+            step_log=temp_step_log,
             cfg=hvp_config,
             model=model,
         )
@@ -426,6 +504,12 @@ def run_lmcleaner_batch_unlearning(
         audit_records.append(audit)
 
         logger.info(f"Applied correction for step {tz}: v_norm={audit['v_norm']:.6f}")
+
+        # 清理内存
+        del records, temp_step_log, v
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
     # 保存模型(如果指定输出目录)
     if output_dir:

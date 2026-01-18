@@ -195,9 +195,12 @@ class TestLMCleanerBatchLevel:
             template_args=None
         )
 
-        # Verify training log was loaded
+        # Verify training log was loaded (uses lazy loading, so step_log.buffer is empty)
         assert trainer.training_logger is not None
-        assert len(trainer.training_logger.step_log.buffer) > 0
+        # With lazy loading, step_log.buffer is empty - records are loaded on-demand
+        # Instead, verify the lazy loader is initialized and has the index
+        assert trainer.lazy_loader is not None
+        assert len(trainer.lazy_loader._chunk_index) > 0
 
 
 # ============================================================================
