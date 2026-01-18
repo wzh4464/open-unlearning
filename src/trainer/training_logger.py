@@ -81,8 +81,8 @@ class LazyRecordLoader:
         self._step_to_chunk: Dict[int, str] = {}  # step_id -> chunk_file
 
     def build_index(self) -> None:
-        """构建 chunk 索引，支持并行扫描"""
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        """构建 chunk 索引，从文件名解析 step_id（无需读取文件内容）"""
+        import re
 
         # 尝试加载缓存的索引
         index_cache = self.log_dir / "chunk_index.json"
@@ -101,25 +101,18 @@ class LazyRecordLoader:
             logger.warning("No chunk files found")
             return
 
-        logger.info(f"Building chunk index from {len(chunk_files)} files...")
+        logger.info(f"Building chunk index from {len(chunk_files)} file names...")
 
-        def scan_chunk(chunk_file: Path) -> tuple:
-            try:
-                with open(chunk_file, "rb") as f:
-                    records = pickle.load(f)
-                if records:
-                    step_ids = [r["step_id"] for r in records]
-                    return (chunk_file.name, min(step_ids), max(step_ids))
-            except Exception as e:
-                logger.warning(f"Error scanning {chunk_file.name}: {e}")
-            return (chunk_file.name, -1, -1)
+        # 从文件名解析 step_id，无需读取文件内容
+        # 文件名格式: step_records_chunk_{step_id}.pkl
+        pattern = re.compile(r"step_records_chunk_(\d+)\.pkl")
 
-        with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-            futures = {executor.submit(scan_chunk, cf): cf for cf in chunk_files}
-            for future in as_completed(futures):
-                name, min_id, max_id = future.result()
-                if min_id >= 0:
-                    self._chunk_index[name] = (min_id, max_id)
+        for chunk_file in chunk_files:
+            match = pattern.match(chunk_file.name)
+            if match:
+                step_id = int(match.group(1))
+                # 每个 chunk 文件包含一个 step 的记录
+                self._chunk_index[chunk_file.name] = (step_id, step_id)
 
         # 保存索引缓存
         with open(index_cache, "w") as f:
