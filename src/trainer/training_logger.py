@@ -1093,17 +1093,7 @@ class BatchReconstructor:
         Returns:
             批次数据,如果无法获取则返回None
         """
-        # 获取步骤记录
-        record = self.training_logger.get_step_record(step_id)
-        if record is None:
-            logger.warning(f"Step {step_id} not found in training log")
-            return None
-
-        # 1. 如果有保存的batch_data,直接使用
-        if record.batch_data is not None:
-            return record.batch_data
-
-        # 2. 如果有sample_indices,尝试重建
+        # 1. 优先检查 sample_indices (lazy loading 模式下最常用)
         if step_id in self.training_logger.sample_indices_per_step:
             if self.dataset is None or self.data_collator is None:
                 logger.warning(
@@ -1126,8 +1116,13 @@ class BatchReconstructor:
                 rng_state,
             )
 
+        # 2. 回退到 step_record (非 lazy loading 模式)
+        record = self.training_logger.get_step_record(step_id)
+        if record is not None and record.batch_data is not None:
+            return record.batch_data
+
         # 3. 无法重建
-        logger.warning(
+        logger.debug(
             f"Cannot reconstruct batch for step {step_id}: "
             f"no batch_data or sample_indices available"
         )
