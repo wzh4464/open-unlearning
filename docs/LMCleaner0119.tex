@@ -1,0 +1,904 @@
+%%%%%%%% ICML 2026 EXAMPLE LATEX SUBMISSION FILE %%%%%%%%%%%%%%%%%
+
+\documentclass{article}
+
+% Recommended, but optional, packages for figures and better typesetting:
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs} % for professional tables
+
+% hyperref makes hyperlinks in the resulting PDF.
+% If your build breaks (sometimes temporarily if a hyperlink spans a page)
+% please comment out the following usepackage line and replace
+% \usepackage{icml2026} with \usepackage[nohyperref]{icml2026} above.
+\usepackage{hyperref}
+ 
+ 
+\usepackage{listings}   
+\usepackage{xcolor}     
+\usepackage{tikz}
+ \usetikzlibrary{shapes,arrows,positioning}
+  
+ 
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.95,0.95,0.92}
+
+\lstdefinestyle{mystyle}{
+	backgroundcolor=\color{backcolour},   
+	commentstyle=\color{codegreen},
+	keywordstyle=\color{magenta},
+	numberstyle=\tiny\color{codegray},
+	stringstyle=\color{codepurple},
+	basicstyle=\ttfamily\footnotesize,
+	breakatwhitespace=false,         
+	breaklines=true,                 
+	captionpos=b,                    
+	keepspaces=true,                 
+	numbers=left,                    
+	numbersep=5pt,                  
+	showspaces=false,                
+	showstringspaces=false,
+	showtabs=false,                  
+	tabsize=2
+}
+\lstset{style=mystyle}
+
+% Attempt to make hyperref and algorithmic work together better:
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+
+% Use the following line for the initial blind version submitted for review:
+\usepackage{icml2026}
+
+% For preprint, use
+% \usepackage[preprint]{icml2026}
+
+% If accepted, instead use the following line for the camera-ready submission:
+% \usepackage[accepted]{icml2026}
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{amsthm}
+
+ 
+\usepackage{amssymb}
+\newcommand{\cmark}{\checkmark}
+\newcommand{\xmark}{$\times$}
+\usepackage{enumitem}
+% if you use cleveref..
+\usepackage[capitalize,noabbrev]{cleveref}
+
+\usepackage{multirow}
+\usepackage{colortbl}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% THEOREMS
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{assumption}[theorem]{Assumption}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+% Todonotes is useful during development; simply uncomment the next line
+%    and comment out the line below the next line to turn off comments
+%\usepackage[disable,textsize=tiny]{todonotes}
+\usepackage[textsize=tiny]{todonotes}
+
+% The \icmltitle you define below is probably too long as a header.
+% Therefore, a short form for the running title is supplied here:
+\icmltitlerunning{Submission and Formatting Instructions for ICML 2026}
+
+\begin{document}
+
+\twocolumn[
+  \icmltitle{LMCleaner: Efficient and Certified Online Unlearning via \\ Truncated Influence Propagation}
+
+  % It is OKAY to include author information, even for blind submissions: the
+  % style file will automatically remove it for you unless you've provided
+  % the [accepted] option to the icml2026 package.
+
+  % List of affiliations: The first argument should be a (short) identifier you
+  % will use later to specify author affiliations Academic affiliations
+  % should list Department, University, City, Region, Country Industry
+  % affiliations should list Company, City, Region, Country
+
+  % You can specify symbols, otherwise they are numbered in order. Ideally, you
+  % should not use this facility. Affiliations will be numbered in order of
+  % appearance and this is the preferred way.
+  \icmlsetsymbol{equal}{*}
+
+  \begin{icmlauthorlist}
+    \icmlauthor{Firstname1 Lastname1}{equal,yyy}
+    \icmlauthor{Firstname2 Lastname2}{equal,yyy,comp}
+    \icmlauthor{Firstname3 Lastname3}{comp}
+    \icmlauthor{Firstname4 Lastname4}{sch}
+    \icmlauthor{Firstname5 Lastname5}{yyy}
+    \icmlauthor{Firstname6 Lastname6}{sch,yyy,comp}
+    \icmlauthor{Firstname7 Lastname7}{comp}
+    %\icmlauthor{}{sch}
+    \icmlauthor{Firstname8 Lastname8}{sch}
+    \icmlauthor{Firstname8 Lastname8}{yyy,comp}
+    %\icmlauthor{}{sch}
+    %\icmlauthor{}{sch}
+  \end{icmlauthorlist}
+
+  \icmlaffiliation{yyy}{Department of XXX, University of YYY, Location, Country}
+  \icmlaffiliation{comp}{Company Name, Location, Country}
+  \icmlaffiliation{sch}{School of ZZZ, Institute of WWW, Location, Country}
+
+  \icmlcorrespondingauthor{Firstname1 Lastname1}{first1.last1@xxx.edu}
+  \icmlcorrespondingauthor{Firstname2 Lastname2}{first2.last2@www.uk}
+
+  % You may provide any keywords that you find helpful for describing your
+  % paper; these are used to populate the "keywords" metadata in the PDF but
+  % will not be shown in the document
+  \icmlkeywords{Machine Learning, ICML}
+
+  \vskip 0.3in
+]
+
+% this must go after the closing bracket ] following \twocolumn[ ...
+
+% This command actually creates the footnote in the first column listing the
+% affiliations and the copyright notice. The command takes one argument, which
+% is text to display at the start of the footnote. The \icmlEqualContribution
+% command is standard text for equal contribution. Remove it (just {}) if you
+% do not need this facility.
+
+% Use ONE of the following lines. DO NOT remove the command.
+% If you have no special notice, KEEP empty braces:
+\printAffiliationsAndNotice{}  % no special notice (required even if empty)
+% Or, if applicable, use the standard equal contribution text:
+% \printAffiliationsAndNotice{\icmlEqualContribution}
+ 
+% \title{LMCleaner: Efficient and Certified Online Unlearning via Truncated Influence Propagation}
+\begin{abstract}
+	Existing machine unlearning methods remove training data influence only \emph{after training} completes. For large models trained for months on billions of noisy examples, such post-hoc removal is inefficient and allows malicious or sensitive data to shape the entire optimization trajectory.  
+	We propose LMCleaner, an efficient and certified \emph{online} unlearning framework that removes target data influence \emph{during training}. Our key insight is that the contractive nature of optimization dynamics causes data influence to decay exponentially, enabling efficient approximation via truncation. Building on this insight, we design a truncated influence propagation mechanism that operates at the batch level to reduce storage, retains only influence within a truncation window for constant-time computation, and injects calibrated noise for certified privacy.
+	Our theoretical analysis proves that truncation error decays exponentially with window size, that noise injection achieves $(\varepsilon, \delta)$-certified unlearning. 
+	Experiments demonstrate that LMCleaner achieves over $100\times$ computational savings compared to baselines while maintaining model utility and defending against membership inference attacks.
+\end{abstract}
+
+\section{Introduction}
+Large language models (LLMs) are trained on massive datasets that may contain sensitive, malicious, or outdated information~\cite{nguyen2025survey}. Since retraining from scratch is computationally prohibitive, machine unlearning has emerged as a practical solution to selectively remove the influence of specified training data without full retraining~\cite{bourtoule2021machine, xu2025lmeraser}. 
+
+Most existing works focus on removing data influence \emph{after} training completion, using techniques such as influence-function-based modifications~\cite{guo2020certified}, negative fine-tuning~\cite{zhang2024negative}, and output filtering~\cite{liu2024large}. However, once training data are used, their influence propagates through all subsequent parameter updates and becomes deeply embedded in the model. Removing such influence after training typically requires fine-tuning on a retain set to preserve model utility, which necessitates re-accessing the original training data. This conflicts with data protection regulations that mandate prompt data deletion after training~\cite{voigt2017eu}. These considerations motivate the need for an \emph{online} unlearning framework that can efficiently remove data influence \emph{during} training.
+ 
+It is challenging to achieve efficient and certified online unlearning for LLMs.
+First, the storage overhead required for influence tracking is prohibitive. To remove a sample's influence from the model, one must track how its contribution propagates through subsequent optimization steps. This requires storing per-sample gradients throughout training, resulting in memory costs that scale linearly with both model size and dataset size.
+Second, the computational cost of influence propagation is impractical. Since each optimization step depends on the previous one, the influence of a training sample accumulates through the entire subsequent training trajectory. Exactly quantifying this influence requires tracing through potentially millions of intermediate steps, leading to intractable computational costs.
+Third, there exist no certified unlearning guarantees for LLM unlearning. Approximate influence removal inevitably leaves residual traces of the deleted data in model parameters. Without rigorous quantification and mitigation of this residual, the unlearning process cannot be certified to meet privacy standards.
+
+To address these challenges, we propose LMCleaner, an efficient and certified online unlearning framework that removes training data influence \emph{during} training. Our approach builds upon a theoretical foundation that models the propagation of training sample influence through the optimization trajectory.
+For the storage bottleneck,  we adopt a batch-level influence tracking strategy that treats mini-batches as atomic units, reducing storage complexity by a factor proportional to the batch size. 
+For the computational bottleneck, we design a truncated influence propagation mechanism. Since influence decays exponentially over time due to contractive optimization dynamics, we limit computation to only a small fixed number of subsequent steps, achieving complexity independent of training history length.
+For the privacy protection, we inject calibrated Gaussian noise to mask the bounded approximation error, ensuring a certified $(\varepsilon, \delta)$-unlearning guarantee based on tight theoretical bounds.
+
+Overall, the main contributions are summarized as follows:
+\begin{itemize}
+	\item  We propose LMCleaner, a pioneering \emph{online} unlearning framework that removes data influence \emph{during training}, preventing sensitive data from affecting the entire optimization trajectory.
+	\item  We design a truncated influence propagation mechanism that operates at the batch level, retains only influence within a truncation window, and injects calibrated noise  for certified privacy.
+	\item  We prove that LMCleaner achieves $(\varepsilon,\delta)$-certified unlearning. Extensive experiments demonstrate over $100\times$ speedup compared to baselines while maintaining model utility and defending against membership inference attacks.
+\end{itemize}
+
+\section{Related Work}
+Machine unlearning methods can be broadly classified into exact unlearning and approximate unlearning~\cite{xu2024machine}.
+Exact unlearning aims to achieve a model state identical to one trained from scratch on the remaining dataset. The representative approach is SISA~\cite{bourtoule2021machine}, which divides data into shards, training independent sub-models, and selectively retrains only affected sub-models. Various derivatives have emerged: DC-k-means~\cite{ginart2019making}, DaRE~\cite{brophy2021machine} and HedgeCut~\cite{schelter2021hedgecut} for tree-based models, GraphEraser~\cite{chen2022graph} and RecEraser~\cite{chen2022recommendation} for graph models, and LMEraser~\cite{xu2025lmeraser} for large models. While providing complete data removal guarantees, exact methods scale prohibitively with model size and complexity~\cite{xu2024machine}.
+
+Approximate unlearning improves efficiency by reducing rather than exactly removing unlearned data influence. Early approaches used influence functions~\cite{guo2020certified, sekhari2021remember} to quantify and reverse data impact, though non-convex optimization challenges limit their practical application. Gradient Ascent~\cite{wu2020deltagrad, neel2021descent}  is a negative fine-tuning approach that directly increases the loss on the forget set via gradient ascent. However, its limited precision, particularly with complex or overlapping data, often degrades general model utility. Negative Preference Optimization (NPO) approaches~\cite{zhang2024negative, fan2024simplicity} treat forgotten data as negative preferences, adjusting parameters to assign low likelihoods to the forget set while maintaining proximity to the original model and preserving general capabilities. Model editing techniques~\cite{jang2023knowledge, wu2023depn,jin2024rwku} target specific knowledge through localized parameter modifications or activation interventions. Output filtering methods~\cite{liu2024large, bhaila2025soft} operate at inference time without parameter changes, though they leave internal representations unchanged. 
+However, these post-hoc approaches lead to either under-unlearning that leaves incomplete influence removal~\cite{pawelczyk2024machine,hu2025unlearning} or over-unlearning that exposes private information~\cite{shi2025muse},  motivating our online approach that reverses influence during the training process.
+
+\section{Preliminaries and Problem Definition}\label{sec:preliminaries}
+\subsection{Preliminaries}\label{subsec:preliminaries}
+Let $\mathcal{Z} = \mathcal{X} \times \mathcal{Y}$ denote the data space, where $\mathcal{X} \subseteq \mathbb{R}^d$ is the input domain, $\mathcal{Y}$ is the output space, and the training dataset is $D = \{z_i = (x_i,y_i)\}_{i=1}^{N}$. We consider the large-scale single-pass regime commonly used in LLM pre-training: each $z_i$ appears in exactly one mini-batch during training.
+
+At step $t$, the model parameters are $\theta^{[t]} \in \mathbb{R}^p$ and the sampled mini-batch is $S_t \subseteq \{1,\dots,N\}$ with $|S_t| = B$. We denote $f_{\theta^{[t]}}$ as the model function at step $t$. For fair comparison with prior unlearning methods~\cite{bourtoule2021machine, ginart2019making}, we train the model by minimizing the empirical risk using mini-batch stochastic gradient descent:
+\begin{equation}
+	\theta^{[t+1]} = \theta^{[t]} - \frac{\eta_t}{|S_t|} \sum_{i \in S_t} \nabla_\theta \ell(z_i; \theta^{[t]}), 
+\end{equation}  where $\ell(z;\theta)$ is the loss and $\eta_t$ is the learning rate.
+%Extensions to other optimizers (Adam, RMSprop) are discussed in Appendix~\ref{app:other_opt}.
+
+For convenience, we define the average mini-batch gradient as $\bar{g}^{[t]} := \frac{1}{|S_t|} \sum_{i \in S_t} \nabla_\theta \ell(z_i; \theta^{[t]})$
+and the mini-batch Hessian as $H^{[t]} := \frac{1}{|S_t|} \sum_{i \in S_t} \nabla_\theta^2 \ell(z_i; \theta^{[t]})$.
+
+\subsection{Problem Definition}\label{subsec:problem_definition}
+Our goal is to design an \emph{online} unlearning method that, upon receiving a delete request during training, removes the influence of the requested data without restarting or interrupting the training pipeline, while preserving model utility on the remained data.
+
+Formally, consider a training process where at step $\tau$, we receive an unlearning request for target data $D_u = \{z_{j_1}, z_{j_2}, \ldots, z_{j_{|D_u|}}\}$ that was previously used in training steps $\{t_{j_1}, t_{j_2}, \ldots, t_{j_{|D_u|}}\}$ respectively. We define the \emph{ideal unlearned reference model} $\theta^{[\tau]}_{\mathrm{ideal},-D_u}$ as the parameters that would have been obtained at step $\tau$ if the model had been trained on the remaining dataset $D' := D \setminus D_u$ from the beginning, following the same training procedure (including mini-batch schedule and random seeds for all batches not containing elements of $D_u$).
+
+Our goal is to obtain an unlearned model with parameter $\hat{\theta}^{[\tau]}$ that closely approximates $\theta^{[\tau]}_{\mathrm{ideal},-D_u}$. Our method must satisfy the following requirements:
+
+Our method must satisfy the following requirements:
+\begin{enumerate} 
+	\item \textbf{Online capability:} Handle delete requests at any step $\tau$ without requiring convergence or retraining from scratch.
+	\item \textbf{Counterfactual consistency:} The unlearned model should approximate the model that would have been obtained had we trained on $D'$ only.
+	\item \textbf{Utility preservation:} Maintain performance on the distribution induced by $D'$.
+\end{enumerate}
+
+For clarity of exposition, we first present our method for unlearning a single batch $S_{t_{z_j}}$ in Sections 2--3. The extension to multiple batches follows by sequential application with RDP composition (Section 4).
+
+ \section{LMCleaner: Efficient and Certified Online Unlearning}\label{sec:online} 
+We propose online unlearning framework that tracks and reverses the influence of target data through three progressive levels: 1) sample-level unlearning for theoretical foundations (Section \ref{subsec:influence_sample}), 2) batch-level unlearning for storage efficiency (Section \ref{subsec:influence_batch}), and 3)  truncated propagation that ensures computational scalability (Section~\ref{subsec:truncated}).
+
+\subsection{Theoretical Foundation: Influence Tracking}\label{subsec:influence_sample}
+Consider a training sample $z_j$ used at step $t_{z_j}$, now requested for unlearning at step $\tau \ge t_{z_j}+1$. The standard parameter update follows:
+\begin{equation}\label{eq:sgd_actual}
+	\theta^{[t+1]}=\theta^{[t]}-\eta_t\bar g^{[t]},\qquad
+	\bar g^{[t]}=\frac1{|S_t|}\sum_{i\in S_t}\nabla_\theta\ell\bigl(z_i;\theta^{[t]}\bigr).
+\end{equation}
+ 
+The counterfactual update excluding $z_j$\footnote{At $t=t_{z_j}$, we replace $z_j$ with a zero-gradient placeholder while keeping the batch size and averaging denominator unchanged.} is $\theta_{-j}^{[t+1]}=\theta_{-j}^{[t]}-\eta_t\,\bar g_{-j}^{[t]}$, where  
+\begin{equation}
+	\bar g_{-j}^{[t]} :=
+	\begin{cases}
+		\displaystyle \frac{1}{|S_{t_{z_j}}|}\sum_{i\in S_{t_{z_j}}\setminus\{j\}} \nabla_\theta \ell\!\left(z_i;\theta_{-j}^{[t]}\right), & t=t_{z_j},\\
+		\displaystyle \frac{1}{|S_t|}\sum_{i\in S_t} \nabla_\theta \ell\!\left(z_i;\theta_{-j}^{[t]}\right), & t\neq t_{z_j}.
+	\end{cases}
+\end{equation} 
+The parameter deviation $\delta^{[t]}:=\theta^{[t]}-\theta_{-j}^{[t]}$ measures the cumulative influence of $z_j$ on model parameters. Before $z_j$ is encountered, both trajectories are identical, so $\delta^{[t]} = 0$ for all $t \le t_{z_j}$. At step $t_{z_j}$, the initial deviation caused by excluding $z_j$ is:
+\begin{equation}\label{eqinitial}
+	\begin{aligned}
+		\delta^{[t_{z_j}+1]} &= \delta^{[t_{z_j}]} - \eta_{t_{z_j}} \bigl( \bar{g}^{[t_{z_j}]} - \bar{g}_{-j}^{[t_{z_j}]} \bigr) \\
+		&= -\frac{\eta_{t_{z_j}}}{|S_{t_{z_j}}|} \nabla_\theta \ell \bigl( z_j; \theta^{[t_{z_j}]} \bigr).
+	\end{aligned}
+\end{equation}
+This initial deviation propagates through subsequent optimization steps. Following the influence function framework~\citep{hara2019data}, the parameter gap evolves as:
+\begin{equation} \label{eqrecursion}
+	\delta^{[t+1]} \approx \bigl(I-\eta_t H^{[t]}\bigr)\,\delta^{[t]},\quad H^{[t]}:=\frac1{|S_t|} \sum_{i\in S_t}\nabla_\theta^2\ell(z_i;\theta^{[t]}).
+\end{equation}
+Define the influence propagator matrix at step $s$ as $P^{[s]} := I - \eta_s H^{[s]}$, and the cumulative propagator from step $a$ to step $b-1$ as:
+$P^{[a,b]} := \prod_{s=a}^{b-1} P^{[s]} = P^{[b-1]} P^{[b-2]} \cdots P^{[a]},$
+where the product is ordered with later steps on the left. 
+Unrolling from the initial deviation to current step $\tau$, we obtain:
+\begin{equation} 
+	\small
+	\delta^{[\tau]} = P^{[t_{z_j}+1, \tau]} \delta^{[t_{z_j}+1]} \approx -\frac{\eta_{t_{z_j}}}{|S_{t_{z_j}}|} P^{[t_{z_j}+1, \tau]} \nabla_\theta \ell(z_j;\theta^{[t_{z_j}]}).
+\end{equation}
+Therefore, the model after removing the influence of $z_j$ is:
+\begin{equation} 
+	\begin{aligned} 
+		\widehat{\theta_{-j}^{[\tau]}} &= \theta^{[\tau]} - \delta^{[\tau]} \\ &\approx \theta^{[\tau]} + \frac{\eta_{t_{z_j}}}{|S_{t_{z_j}}|} P^{[t_{z_j}+1, \tau]} \nabla_\theta \ell(z_j;\theta^{[t_{z_j}]}). 
+	\end{aligned}
+\end{equation} 
+This formulation enables \emph{online} unlearning as it requires only the mini-batch gradient and local curvature information without waiting for model convergence.
+
+
+\subsection{Batch-Level Unlearning}\label{subsec:influence_batch}
+The above sample-level influence tracking requires storing per-sample gradients and computing individual influence propagations, resulting in $O(Np)$ memory and $O(N)$ propagation operations that are prohibitive for large models.
+
+\paragraph{Key Insight.} 
+All samples within a mini-batch jointly induce a single parameter update, making their influences inherently entangled through the shared optimization step. This observation motivates treating mini-batches as atomic units for influence tracking and removal, which we term \emph{batch-level unlearning}. 
+
+When unlearning the entire batch $S_{t_{z_j}}$ used at step $t_{z_j}$, we model the counterfactual scenario where the optimization step is skipped entirely, i.e., $\theta_{-S_{t_{z_j}}}^{[t_{z_j}+1]} = \theta^{[t_{z_j}]}$. The initial deviation becomes:
+\begin{equation}
+	\delta^{[t_{z_j}+1]} = \theta^{[t_{z_j}+1]} - \theta_{-S_{t_{z_j}}}^{[t_{z_j}+1]} 
+	= \theta^{[t_{z_j}+1]} - \theta^{[t_{z_j}]} = u^{[t_{z_j}]}.
+\end{equation}
+Propagating forward via Eq.~\eqref{eqrecursion}, the cumulative deviation at step $\tau$ is:
+\begin{equation}\label{eq: mainbatch}
+	\delta^{[\tau]} = P^{[t_{z_j}+1, \tau]} \cdot u^{[t_{z_j}]}.
+\end{equation}
+Thus, the unlearned parameters are $\widehat{\theta}_{-S_{t_{z_j}}}^{[\tau]} = \theta^{[\tau]} - \delta^{[\tau]}$.
+ 
+This batch-level formulation reduces storage from $O(Np)$ (per-sample gradients) to $O(\frac{N}{B}p)$.  We store parameter snapshots $\{\theta^{[t]}\}$, batch indices $\{S_t\}$, and learning rates $\{\eta_t\}$; Hessian-vector products are computed on-demand via automatic differentiation, avoiding $O(p^2)$ Hessian storage.
+For LLaMA-3.2-1B ($p \approx 1.2 \times 10^9$) with $B = 512$ and $T = 1{,}000$ steps, parameter snapshots require $\sim$2.4\,TB in FP16, a $512\times$ reduction from per-sample storage. For resource-constrained settings, sparse checkpointing every $C$ steps further reduces storage to $O(Tp/C)$ by reconstructing intermediate parameters on-demand.
+
+Since batch-level unlearning removes the influence of the entire batch including benign samples, we address this through \emph{deferred re-learning}: re-adding the affected benign data into the pool of unused training data, allowing them to be learned again during subsequent training.
+
+ 
+\subsection{Truncated Propagation for Scalability}\label{subsec:truncated}
+While batch-level unlearning significantly reduces storage costs, computing the full influence propagation $P^{[t_{z_j}+1,\tau]}$ remains computationally prohibitive. Exact calculation requires evaluating a product of Hessian-vector products across all steps from $t_{z_j}$ to $\tau$, resulting in $O((\tau - t_{z_j})p)$ complexity. For LLM pre-training where the lag $\tau - t_{z_j}$ can reach millions of steps, this is infeasible.
+\paragraph{Key Insight.} The influence of a gradient update decays exponentially over time due to the contractive nature of optimization dynamics~\citep{hardt2016train}. Intuitively, subsequent updates progressively overwrite the effect of any specific batch, causing its influence to fade geometrically. We formalize this observation in the following lemma.
+
+\begin{lemma}[Contractive Propagation]\label{lemma:contractive}
+	Under standard regularity conditions on the loss function (detailed in Appendix~\ref{subsec:app_assumptions}), the influence propagator satisfies $\|P^{[t]}\|_2 \le \gamma$ for some $\gamma \in (0,1)$ and all $t$.
+\end{lemma}
+The proof is provided in Appendix~\ref{subsec:app_contractive}. This contractivity motivates approximating the full propagator by using only the $K$ steps immediately following the target batch. We define $K^\star := \min\{K, \tau - t_{z_j} - 1\}$ and compute $\delta^{[\tau]}_K = P^{[t_{z_j}+1, t_{z_j}+K^\star+1]} \cdot u^{[t_{z_j}]}$.  Algorithm~\ref{alg:lmcleaner_param} details this procedure. 
+
+ \begin{algorithm}[h]
+ 	\caption{LMCleaner: Certified Online Unlearning}\label{alg:lmcleaner_param}
+ 	\begin{algorithmic}[1]
+ 		\REQUIRE 
+ 		Target batch step $t_{z_j}$; 
+ 		Current parameters $\theta^{[\tau]}$; 
+ 		Truncation window $K$; 
+ 		Noise scale $\sigma$;
+ 		Training log $\mathcal{L} = \{\theta^{[t]}, S_t, \eta_t\}_{t=0}^{\tau}$.
+ 		\ENSURE Unlearned parameters $\widetilde{\theta}^{[\tau]}$.
+ 		
+ 		\STATE \textbf{Phase 1: Compute Initial Deviation}
+ 		\STATE $v \gets \theta^{[t_{z_j}+1]} - \theta^{[t_{z_j}]}$
+ 		
+ 		\STATE \textbf{Phase 2: Truncated Influence Propagation}
+ 		\STATE $t_{\text{end}} \gets \min\{t_{z_j} + K, \tau - 1\}$
+ 		\FOR{$s = t_{z_j} + 1$ \textbf{to} $t_{\text{end}}$}
+ 		%\STATE $g \gets \mathcal{G}[s]$  \COMMENT{Fetch stored gradient at step $s$}
+ 		\STATE $Hv \gets g \cdot (g^\top v)$ %\COMMENT{Fisher approximation: $H \approx gg^\top$}
+ 		\STATE $v \gets v - \eta_s \cdot Hv$
+ 		\ENDFOR
+
+ 		
+ 		\STATE \textbf{Phase 3: Influence Removal}
+ 		\STATE $\widehat{\theta}^{[\tau]} \gets \theta^{[\tau]} - v$
+ 		
+ 		\STATE \textbf{Phase 4: Privacy Protection}
+ 		\STATE $\widetilde{\theta}^{[\tau]} \gets \widehat{\theta}^{[\tau]} + \mathcal{N}(0, \sigma^2 I)$
+ 		
+ 		\STATE \textbf{return}   $\widetilde{\theta}^{[\tau]}$
+ 	\end{algorithmic}
+ \end{algorithm}
+ 
+The computational cost of Algorithm~\ref{alg:lmcleaner_param} is $O(Kp)$, independent of the training history length $\tau$. This constant-time complexity is enabled by truncation, which exploits the exponential decay of influence over optimization steps. The noise injection in Phase 4 serves to mask approximation errors and achieve certified unlearning. We provide formal error bounds and privacy guarantees in Section~\ref{sec:theory}.
+
+
+\section{Theoretical Analysis}\label{sec:theory} 
+We establish formal guarantees for LMCleaner covering three aspects: approximation error bounds that justify our truncation mechanism (Section~\ref{subsec:convergence}), certified unlearning guarantees that formalize the privacy protection (Section~\ref{subsec:privacy_theory}), and sequential composition analysis for continuous operation (Section~\ref{subsec:stability}).
+
+
+\subsection{Approximation Error Analysis}\label{subsec:convergence}
+The efficacy of LMCleaner relies on the approximate unlearned parameters $\widehat{\theta}^{[\tau]}$ remaining close to the ideal retrained parameters $\theta^{[\tau]}_{\mathrm{ideal}}$. Two sources of error arise in our framework: linearization error from the first-order Taylor approximation in Eq.~\eqref{eqrecursion}, and truncation error from limiting the propagation to $K$ steps. We bound each component and their combination.
+ 
+The truncation error decays exponentially with the window size $K$, as formalized in the following proposition.
+
+\begin{proposition}[Truncation Error]\label{prop:truncation_error}
+	Under the contractive propagation condition (Lemma~\ref{lemma:contractive}) with factor $\gamma \in (0,1)$, the difference between the full influence $\delta^{[\tau]}_{\mathrm{full}}$ and the truncated influence $\delta^{[\tau]}_{K}$ satisfies:
+	\begin{equation}
+		\|\delta^{[\tau]}_{\mathrm{full}} - \delta^{[\tau]}_{K}\|_2
+		\le \frac{\gamma^{K^\star}}{1-\gamma} \|\delta^{[t_{z_j}+1]}\|_2,
+	\end{equation}
+	 where $K^\star = \max\{0, \min\{K, \tau - t_{z_j} - 1\}\}$ is the effective truncation window.
+\end{proposition}
+The proof, which uses the geometric series bound on the residual propagator, is provided in Appendix~\ref{subsec:app_convergence}. For typical contractivity $\gamma \approx 0.99$ and a moderate window $K{=}1000$, the truncation error becomes negligible ($\gamma^K \approx 4 \times 10^{-5}$), validating our truncation strategy.
+ 
+ 
+\begin{theorem}[Total Approximation Error]\label{thm:convergence}
+	Under Assumptions \ref{ass:smoothness} to \ref{ass:positive_curvature}, provided the initial influence satisfies $\|\delta^{[t_{z_j}+1]}\|_2 < \frac{1-\gamma}{2\eta_{\max}\rho}$ (ensuring stability of the Taylor approximation), the approximation error of Algorithm~\ref{alg:lmcleaner_param} is bounded by:
+	\begin{equation}
+		\left\|\widehat{\theta}^{[\tau]} - \theta^{[\tau]}_{\mathrm{ideal}}\right\|_2 \le \Delta_{\mathrm{det}} := C_{\mathrm{lin}} \|\delta^{[t_{z_j}+1]}\|_2 + \frac{\gamma^{K^\star}}{1-\gamma} \|\delta^{[t_{z_j}+1]}\|_2,
+	\end{equation}
+	where $C_{\mathrm{lin}}$ is a finite constant derived from the bound on the recursive error dynamics (Appendix~\ref{subsec:app_convergence}).
+\end{theorem}
+
+The detailed proof is provided in Appendix~\ref{subsec:app_convergence}. The bound $\Delta_{\mathrm{det}}$ quantifies the residual trace of the forgotten data that remains due to approximation errors. This quantity plays a pivotal role in calibrating the noise injection for certified privacy, as we establish next.
+
+\subsection{Certified Privacy Guarantee}\label{subsec:privacy_theory}
+The deterministic approximation $\widehat{\theta}^{[\tau]}$ does not perfectly match $\theta^{[\tau]}_{\mathrm{ideal}}$ due to linearization and truncation errors bounded by $\Delta_{\mathrm{det}}$. To achieve certified unlearning, we inject calibrated Gaussian noise to mask this residual, rendering the output distribution statistically indistinguishable from the ideal retrained model.
+\begin{theorem}[Certified Unlearning]\label{thm:unlearning}
+	For any privacy parameters $\varepsilon > 0$ and $\delta \in (0,1)$, if the noise scale in Algorithm~\ref{alg:lmcleaner_param} satisfies 
+	\begin{equation}
+		\sigma \ge \frac{\Delta_{\mathrm{det}}}{\varepsilon} \sqrt{2\log(1.25/\delta)},
+	\end{equation}
+	then the algorithm achieves $(\varepsilon, \delta)$-certified unlearning. Specifically, for any measurable set $W \subseteq \mathbb{R}^p$:
+	\begin{equation}
+		\Pr[\widetilde{\theta}^{[\tau]} \in W] \le e^\varepsilon \Pr[\theta^{[\tau]}_{\mathrm{ideal}} + \mathcal{N}(0,\sigma^2 I) \in W] + \delta.
+	\end{equation}
+\end{theorem}
+The proof leverages Rényi Differential Privacy (RDP) for tight analysis of the Gaussian mechanism. We first establish that the mechanism satisfies $(\alpha, \varepsilon_\alpha)$-RDP, then convert to the standard $(\varepsilon, \delta)$-unlearning form through optimal order selection. The complete proof is provided in Appendix~\ref{subsec:app_privacy}. This formulation directly measures the statistical indistinguishability between the unlearned model and the ideal retrained model, aligning with the standard certified unlearning definition~\citep{guo2020certified}.
+ 
+\subsection{Sequential Stability and Complexity}\label{subsec:stability} 
+In online settings, models undergo a sequence of $M$ unlearning requests over time. We analyze both the cumulative privacy guarantee and the utility stability under repeated deletions.
+\begin{theorem}[Sequential Unlearning Composition]\label{thm:sequential}
+	Consider a sequence of $M$ unlearning requests on samples $z_1, \dots, z_M$. Let $\mathcal{M}^{(i)}$ be the model state after the $i$-th unlearning, and $\mathcal{R}^{(i)}$ be the ideal model retrained on $D \setminus \{z_1, \dots, z_i\}$. 
+	
+	If each step satisfies $(\varepsilon_i, \delta_i)$-certified unlearning with respect to the shifting baseline $\mathcal{R}^{(i-1)} \to \mathcal{R}^{(i)}$, then the final model $\mathcal{M}^{(M)}$ satisfies $(\varepsilon_{\mathrm{total}}, \delta_{\mathrm{total}})$-indistinguishability from $\mathcal{R}^{(M)}$, where:
+	\begin{equation}
+		\varepsilon_{\mathrm{total}} = \sum_{i=1}^M \varepsilon_i + \sqrt{2\log(1/\delta') \sum_{i=1}^M \varepsilon_i^2}, \quad \delta_{\mathrm{total}} = \sum_{i=1}^M \delta_i + \delta'.
+	\end{equation}
+\end{theorem}
+This advanced composition bound is derived via RDP's linear additivity property and subsequent conversion to $(\varepsilon, \delta)$ form. The proof is provided in Appendix~\ref{subsec:app_sequential}. Notably, when individual budgets are equal ($\varepsilon_i = \varepsilon_0$), the total privacy loss grows as $O(\sqrt{M})$ rather than $O(M)$, enabling significantly more unlearning operations under the same privacy budget compared to basic composition.
+
+For utility stability, the contractivity of optimization dynamics (Lemma~\ref{lemma:contractive}) ensures that approximation errors from earlier deletions decay geometrically over subsequent training steps. Let $e_i$ denote the approximation error from the $i$-th deletion occurring at step $t_i$. The total accumulated error at step $\tau$ satisfies:
+\begin{equation}
+	\text{Total Error} \le \sum_{i=1}^M \gamma^{\tau - t_i} e_i \le \frac{\max_i(e_i)}{1-\gamma},
+\end{equation}
+which remains bounded as long as individual errors are controlled. This ensures LMCleaner is numerically stable for continuous operation without error divergence. We empirically validate this stability in Section~\ref{sec:experiments}.
+
+ 
+
+% \paragraph{Online TOFU Protocol.}
+% To evaluate online unlearning, we modify the standard protocol: (1) Epoch 1: fine-tune on forget + retain data jointly; (2) Epochs 2-K: continue training on retain data only; (3) Issue unlearning request at epoch $K$. We vary $K \in \{1, 2, 3, 5, 10\}$ to simulate different forgetting lags.
+
+\begin{table*}[t]
+	\centering
+	\caption{Comparison of Unlearning Methods. }
+	\label{tab:method_comparison}
+	\resizebox{\textwidth}{!}{
+		\begin{tabular}{l|ccc|ccc|cc}
+			\toprule
+			\multirow{2}{*}{\textbf{Method}} & \multicolumn{3}{c|}{\textbf{Capability}} & \multicolumn{3}{c|}{\textbf{Total Cost}}& \multicolumn{2}{c}{\textbf{Data at Deletion}} \\
+			\cmidrule(lr){2-4} \cmidrule(lr){5-7} \cmidrule(lr){8-9}
+			& Online & Sample-level & Certified & Complexity & Storage & Est.\ FLOPs& Forget & Retain \\
+			\midrule
+			GA~\citep{jang2023knowledge}    & $\times$ & $\times$ & $\times$ 			& $O(S|D_f|sp)$ & $O(|D| + p)$ & $\sim10^{18}$& Required & -- \\
+			NPO~\citep{zhang2024negative}   & $\times$ & $\times$ & $\times$ & $O(S(|D_f|{+}|D_r|)sp)$ & $O(|D| + p)$ & $\sim10^{19}$& Required &Required \\
+			RMU~\citep{li2024wmdp}   & $\times$ & $\times$ & $\times$ 			& $O(S(|D_f|{+}|D_r|)sp)$ & $O(|D| + p)$ & $\sim10^{19}$& Required & Required \\
+			WGA~\citep{wang2025rethinking}   & $\times$ & $\times$ & $\times$ & $O(S(|D_f|{+}|D_r|)sp)$ & $O(|D| + p)$ & $\sim10^{19}$			& Required& -- \\
+			PDU~\citep{entesari2025constrained}   & $\times$ & $\times$ & $\times$ & $O(S(|D_f|{+}|D_r|)sp)$ & $O(|D| + p)$ & $\sim10^{19}$& Required & Required \\
+			HFR~\citep{qiao2025hessian}& \checkmark & \checkmark & \checkmark & $O(NEsp)$ & $O(Np)$ & $\sim10^{18}$& -- & -- \\
+			Retrain & $\times$ & \checkmark & \checkmark & $O(T|D|sp)$ & $O(|D| + p)$ & $\sim10^{19}$			& Required & Required\\
+			\midrule
+			\rowcolor{blue!10}
+		  \textbf{LMCleaner} & \checkmark & \checkmark & \checkmark & $O(KBsp)$ & $O(Tp)$ & $\mathbf{\sim10^{17}}$& -- & -- \\
+			\bottomrule
+		\end{tabular}
+	}
+	{\footnotesize 
+		$N$=num of training samples; $|D|$= total dataset size; $S$=unlearning epochs; $E$=training epochs; $B$=batch size; \\$K$=truncation window; $T$=training steps; $s$=sequence length; $p$=parameters.
+	}
+\end{table*}
+
+\section{Experiments}\label{sec:experiments}
+
+
+\subsection{Experimental Setup}\label{subsec:exp_setup}
+\paragraph{Model and Dataset.}
+We use LLaMA-2-7B~\citep{touvron2023llama} on TOFU benchmark~\citep{maini2024tofu}, which contains 200 fictitious authors with 20 QA pairs each. We use the standard 10\% forget split ($|D_f|{=}400$), with all methods starting from the same fine-tuned checkpoint.
+
+\paragraph{Metrics.}
+We report 1) Forget Quality (lower is better): Forget Accuracy, Truth Ratio, Probability; 2) Model Utility (higher is better): Retain Accuracy, Real Authors, World Facts; and 3) Privacy: MIA AUC (0.5 indicates perfect privacy).
+
+\paragraph{Baselines.}
+We compare against six methods: 
+GA~\citep{jang2023knowledge} maximizes loss on forget data;  
+NPO~\citep{zhang2024negative} treats forgetting as negative preference optimization; 
+RMU~\citep{li2024wmdp} steers latent representations toward random vectors; 
+WGA~\citep{wang2025rethinking} applies token-wise weighting to gradient ascent; 
+PDU~\citep{entesari2025constrained} formulates unlearning as constrained entropy maximization; 
+HFR~\cite{qiao2025hessian} precomputes per-sample influence approximators during training for instant deletion.
+We also use Retrain as the gold standard.
+
+\subsection{Method Comparison}\label{subsec:exp_standard}
+Table~\ref{tab:method_comparison} compares unlearning methods across three dimensions. We highlight LMCleaner's three key advantages:
+
+\textbf{(1) Sample-level Support.}  Real-world unlearning requests arrive individually, and regulations such as GDPR mandate timely deletion. Standard fine-tuning methods (GA, NPO) typically struggle with this granularity; they require a sufficiently large forget set $D_f$ to produce stable gradient signals, as optimizing a single sample often leads to ineffective updates or instability. In contrast, LMCleaner precisely tracks and removes per-sample influence through the training trajectory, natively supporting sample-level unlearning.
+
+\textbf{(2) Training-Data-Free Deletion.} Fine-tuning methods require access to forgotten data during deletion (and often need to retain the data) to perform forgetting operations in the future, leading to privacy breaches and retaining the raw data $|D|$. HFR removes the dependency on raw data but storing an influence vector for every sample $O(Np)$, which is computationally prohibitive for LLMs. LMCleaner only store optimization trajectory snapshots, significantly reducing storage costs and ensuring  security of training data.
+
+\textbf{(3) Certified Guarantee.} Only LMCleaner, HFR, and Retrain provide formal $(\varepsilon,\delta)$-certified unlearning guarantees. Fine-tuning methods lack theoretical assurance that forgotten data cannot be recovered, a vulnerability empirically confirmed by membership inference attacks~\citep{shi2025muse}.
+
+\paragraph{Cost Analysis.} We estimate FLOPs under strong unlearning ($S{=}80$ epochs) with: 7B parameters, sequence length $s{=}1024$, batch size $B{=}32$, training samples $n{=}4000$, forget set $|D_f|{=}400$, retain set $|D_r|{=}3600$, training epochs $E{=}5$, and truncation window $K{=}64$. LMCleaner achieves $\sim10^{17}$ FLOPs,  10--100$\times$ lower than fine-tuning methods.
+
+
+ 
+ \clearpage
+
+\subsection{Evaluation Comparison}
+ Table~\ref{tab:standard_tofu} presents results on the standard TOFU benchmark (equivalent to $K{=}1$ in our online protocol). LMCleaner achieves superior performance across all metrics, approaching the retrain oracle. Notably, LMCleaner attains MIA AUC of 0.518, close to the ideal 0.5, validating the effectiveness of our certified privacy mechanism. While existing methods show reasonable forget quality, they exhibit significant gaps in both utility preservation and privacy protection.
+ 
+ % Table 2: Standard TOFU results
+ 
+ 
+ \subsection{Online Unlearning Evaluation}\label{subsec:exp_online}
+ 
+ Table~\ref{tab:online_main} and Figure~\ref{fig:online_curves} present our main results on online unlearning with varying forgetting lags.
+ 
+ \paragraph{Key Finding 1: Fine-tuning methods fail in online scenarios.}
+ As the forgetting lag $K$ increases, all baseline methods show severe degradation. GA's forget accuracy increases from 0.22 to 0.69 (+214\%), indicating near-complete failure to forget. NPO and RMU, despite being state-of-the-art on standard benchmarks, exhibit similar trends (+261\% and +265\% respectively). This confirms our theoretical analysis: fine-tuning the final model cannot effectively remove information that has propagated through extensive subsequent training.
+ 
+ \paragraph{Key Finding 2: LMCleaner maintains consistent performance.}
+ LMCleaner shows minimal degradation across all lags: forget accuracy increases only from 0.08 to 0.14 (+75\%), retain accuracy decreases from 0.96 to 0.93 (-3\%), and MIA remains near-optimal (0.52 to 0.54). This stability stems from our influence-tracking mechanism, which explicitly models how the forget data's effect propagates and reverses it accordingly.
+ 
+ \paragraph{Key Finding 3: The performance gap widens with lag.}
+ At $K{=}1$, LMCleaner outperforms RMU by 53\% in forget accuracy (0.08 vs 0.17). At $K{=}10$, this gap widens to 77\% (0.14 vs 0.62). This demonstrates that LMCleaner's advantage becomes more pronounced in realistic online scenarios where deletion requests arrive long after data usage.
+ 
+ % Table 3: Online TOFU results
+ % Figure 1: Performance curves
+ 
+ 
+ \subsection{Analysis}\label{subsec:exp_analysis}
+ 
+ \paragraph{Efficiency Comparison.}
+ Table~\ref{tab:efficiency} compares theoretical complexity. While fine-tuning methods require $O(E|D|p)$ computation, LMCleaner requires only $O(Kp)$ where $K$ is the truncation window. More critically, \textbf{fine-tuning methods cannot achieve the primary goal of effective online unlearning}, as evidenced by their severe degradation in Table~\ref{tab:online_main}. LMCleaner trades modest storage overhead ($O(Tp)$ for training logs) for the unique capability of certified online unlearning.
+ 
+ \paragraph{Why Fine-tuning Methods Fail.}
+ The fundamental issue is that fine-tuning methods operate only on the final model state, lacking access to training dynamics. When forget data was used at epoch 1, its influence has propagated through all subsequent updates, becoming entangled with retain data learning. Gradient ascent on the final model cannot precisely reverse this propagation. LMCleaner solves this by logging update vectors during training and computing the exact (truncated) influence propagation.
+ 
+ \paragraph{Certified Guarantee Validation.}
+ The consistently low MIA AUC (0.52-0.54) across all $K$ values validates our certified privacy mechanism. This near-random distinguishability confirms that the output distribution closely matches the ideal retrained model, as guaranteed by Theorem~\ref{thm:unlearning}.
+ 
+ % Table 4: Efficiency comparison
+ 
+ 
+ 
+\clearpage
+\section*{Impact Statement}\label{subsec:app_impact}
+LMCleaner enables practical compliance with data protection regulations such as GDPR's ``right to be forgotten" for large language models. By providing certified unlearning guarantees with tractable computational costs, our method can help responsible AI deployment across organizations with limited computational resources.
+
+The ability to efficiently remove specific training data could potentially be misused by malicious andversary to selectively eliminate safety-relevant training samples, degrading model alignment. We recommend that unlearning operations be logged and audited, and that critical safety data be protected from removal requests.
+
+ 
+\bibliography{citation}
+\bibliographystyle{icml2026}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% APPENDIX
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\appendix
+\onecolumn
+
+
+\section{Extended Related Work}
+Machine unlearning methods can be broadly classified into exact unlearning and approximate unlearning~\cite{xu2024machine}. 
+
+\paragraph{Exact Unlearning}
+Exact unlearning aims to achieve a model state identical to one retrained from scratch on the remaining dataset. The foundational approach is SISA~\cite{bourtoule2021machine}, which divides training data into disjoint shards, trains independent sub-models on each, and then aggregates predictions. When data needs to be forgotten, only the sub-models containing that specific data require retraining, significantly reducing computational overhead compared to full retraining.
+
+Building on SISA, various domain-specific adaptations have emerged. DC-k-means~\cite{ginart2019making} applies exact unlearning to k-means clustering by maintaining cluster statistics that can be efficiently updated upon data removal. For tree-based models, DaRE~\cite{brophy2021machine} and HedgeCut~\cite{schelter2021hedgecut} enable efficient removal from random forests, leveraging the inherent modularity of ensemble methods. Graph-based applications include GraphEraser~\cite{chen2022graph} for graph neural networks and RecEraser~\cite{chen2022recommendation} for recommendation systems, both exploiting structural properties to minimize recomputation. SISA-style partitioning reduces the effective training data for each sub-model and therefore degrades model quality. This makes it unsuitable for billion-parameter models that rely on large, unified training corpora. LMEraser~\cite{xu2025lmeraser} employs a prompt tuning architecture that confines data partitioning to the prompt training stage, preserving the model backbone and enabling precise unlearning to scale to large language models.
+
+Despite these advances, exact unlearning methods face fundamental scalability limitations. The computational cost grows prohibitively with model size and dataset complexity. 
+
+\paragraph{Approximate Unlearning}
+Approximate unlearning methods improve efficiency by reducing the influence of forgotten data, rather than exactly removing. 
+
+Early approximate unlearning methods~\cite{guo2020certified,sekhari2021remember,suriyakumar2022algorithms} utilize influence functions to quantify how target training data affect model parameters. These methods estimate parameter changes that would result from removing specific data points, thus avoiding expensive retraining. Guo \textit{et al.}~\cite{guo2020certified} provided certified removal guarantees for convex models, while Sekhari \textit{et al.}~\cite{sekhari2021remember} extended the framework to more general settings.
+However, influence function-based approaches face significant challenges in deep learning contexts. Computing exact influence requires expensive Hessian inverses, and and first-order approximations often become unreliable for highly non-convex objectives~\citep{basu2021influence}. This limitations have motivated more direct gradient-based interventions.
+	
+Gradient Ascent (GA) methods~\cite{wu2020deltagrad,neel2021descent} perform gradient ascent on the loss function with respect to the forget set, effectively minimizing the model's ability to correctly predict on unwanted data. DeltaGrad~\cite{wu2020deltagrad} formalizes this approach, showing that gradient ascent can approximate the effect of data removal under certain conditions. While computationally efficient, these methods lack formal certified guarantees and can significantly degrade general model performance~\citep{ilharco2023editing}.
+
+The scale of modern large language models poses unique challenges that traditional unlearning methods cannot address. This has motivated a surge of LLM-specific unlearning approaches, primarily based on fine-tuning, knowledge editing, or output manipulation.
+1) Fine-tuning based methods adapt the pre-trained model through additional optimization to suppress knowledge of forgotten data.  Negative Preference Optimization (NPO)~\cite{zhang2024negative} treats forgotten data as negative preferences within the DPO framework~\cite{rafailov2023direct}. SCRUB~\cite{kurmanji2023towards} combines gradient ascent on forget data with knowledge distillation from a retain-set teacher. \citet{fan2024simplicity} propose simplified fine-tuning objectives that achieve competitive results. While these methods are computationally tractable for LLMs, they operate heuristically without formal guarantees on the completeness of data influence removal.
+2) Knowledge editing targets specific information encoded within model parameters. Task Vectors~\citep{ilharco2023editing} subtract task-specific weight differences from model weights, effectively removing learned capabilities. 
+Localization-based editing methods~\cite{meng2022locating,wu2023depn,wei2024assessing} identify and modify specific model components (layers, neurons, attention heads) responsible for encoding target knowledge. ROME~\cite{meng2022locating} and MEMIT~\cite{meng2023mass} demonstrate precise fact editing in language models by targeting specific layers and rank-one updates. However, these approaches require careful knowledge localization and may struggle with distributed representations.
+Recent work has expanded editing to broader knowledge categories. Knowledge Neurons~\cite{jang2023knowledge} identifies and modifies neurons responsible for specific facts, while RWKU~\cite{jin2024rwku} provides unlearning for factual knowledge through targeted parameter updates. Sepahvand \textit{et al.}~\cite{sepahvand2025selective} develop selective editing techniques that preserve related knowledge while removing specific information.
+3) Output filtering modifies model behavior at inference time without altering trained parameters. Corrupted prompts~\citep{liu2024large}, soft prompting~\citep{bhaila2025soft}, and in-context unlearning~\citep{pawelczyk2024context} guide outputs away from forgotten content. While highly efficient, these methods face a fundamental limitation: models retain internal representations of forgotten information, merely preventing explicit expression. This raises serious concerns about unlearning completeness and potential circumvention through extraction attacks.
+
+The growth of LLM unlearning has motivated evaluation frameworks. TOFU~\citep{maini2024tofu} provides a benchmark with fictitious author profiles for controlled evaluation. MUSE~\citep{shi2025muse} offers six-dimensional evaluation covering memorization, privacy, and utility. WMDP~\citep{li2024wmdp} focuses on unlearning hazardous knowledge. These benchmarks reveal that existing methods often fail to completely remove target knowledge while preserving model utility. However, they generally overlook the computational and storage overhead of unlearning methods, leaving their practical scalability unassessed.
+ 
+\clearpage
+
+
+\section{Batch-Level Unlearning Derivation}\label{app:batch}
+This appendix provides the detailed derivation of the batch-level unlearning formulation presented in Section~\ref{subsec:influence_batch}. We show how removing an entire mini-batch reduces to tracking a single parameter deviation that propagates through subsequent optimization steps.
+
+\paragraph{Problem Setup}
+Consider a mini-batch $S_{t_{z_j}}$ used for training at step $t_{z_j}$, which is now requested for unlearning at current step $\tau > t_{z_j}$. Our goal is to compute the parameter deviation $\delta^{[\tau]} := \theta^{[\tau]} - \theta_{-S_{t_{z_j}}}^{[\tau]}$, where $\theta^{[\tau]}$ denotes the actual parameters and $\theta_{-S_{t_{z_j}}}^{[\tau|}$ denotes the hypothetical parameters that would have been obtained if batch $S_{t_{z_j}}$ had never been used.
+	
+We assume each training sample appears at most once during training, which is standard in large-scale LLM pre-training where the dataset is traversed in a single epoch.
+	
+ 
+\paragraph{Initial Deviation}The actual trajectory with $S_{t_{z_j}}$ is:
+	\begin{equation}
+		\theta^{[t+1]} = \theta^{[t]} - \eta_t \bar{g}^{[t]}, \quad \bar{g}^{[t]} = \frac{1}{|S_t|} \sum_{i \in S_t} \nabla_\theta \ell(z_i; \theta^{[t]|}),
+	\end{equation}
+	where training proceeds normally through all steps including $t_{z_j}$.
+	
+The counterfactual trajectory without $S_{t_{z_j}}$  is: 
+	\begin{equation}
+		\theta_{-S_{t_{z_j}}}^{[t+1]} = 
+		\begin{cases}
+			\theta_{-S_{t_{z_j}}}^{[t]}, & t = t_{z_j} \text{ (step skipped)}\\[4pt]
+			\theta_{-S_{t_{z_j}}}^{[t]} - \eta_t \bar{g}_{-S_{t_{z_j}}}^{[t]}, & t \neq t_{z_j}
+		\end{cases}
+	\end{equation}
+	where $\bar{g}_{-S_{t_{z_j}}}^{[t]} = \frac{1}{|S_t|} \sum_{i \in S_t} \nabla_\theta \ell(z_i; \theta_{-S_{t_{z_j}}}^{[t]})$ is the gradient at the counterfactual parameters.
+	
+Before step $t_{z_j}$, both trajectories are identical since $S_{t_{z_j}}$ has not yet been encountered. Thus, we have
+\begin{equation}
+	\theta^{[t]} = \theta_{-S_{t_{z_j}}}^{[t]}, \quad \forall t \le t_{z_j}.
+\end{equation}
+
+Note that at step $t_{z_j}$, the trajectories diverge. In the actual trajectory, we apply the gradient update. In the counterfactual, we skip this step, which is:
+\begin{align}
+	\theta^{[t_{z_j}+1]} &= \theta^{[t_{z_j}]} - \eta_{t_{z_j}} \bar{g}^{[t_{z_j}]}, \\
+	\theta_{-S_{t_{z_j}}}^{[t_{z_j}+1]} &= \theta_{-S_{t_{z_j}}}^{[t_{z_j}]} = \theta^{[t_{z_j}]}.
+\end{align}
+
+The initial deviation is therefore:
+\begin{equation}\label{eq:initial_batch}
+	\delta^{[t_{z_j}+1]} := \theta^{[t_{z_j}+1]} - \theta_{-S_{t_{z_j}}}^{[t_{z_j}+1]} = -\eta_{t_{z_j}} \bar{g}^{[t_{z_j}]} = u^{[t_{z_j}]},
+\end{equation}
+where $u^{[t_{z_j}]} := \theta^{[t_{z_j}+1]} - \theta^{[t_{z_j}|}$ is the parameter update at step $t_{z_j}$, consistent with the notation in Section~\ref{subsec:influence_batch}.
+
+\paragraph{Deviation Propagation via Taylor Expansion}
+For steps $t > t_{z_j}$, the deviation $\delta^{[t]} := \theta^{[t]} - \theta_{-S_{t_{z_j}}}^{[t]}$ evolves as:
+\begin{equation}\label{eq:deviation_update}
+	\delta^{[t+1]} = \theta^{[t+1]} - \theta_{-S_{t_{z_j}}}^{[t+1]} 
+	= \bigl(\theta^{[t]} - \eta_t \bar{g}^{[t]}\bigr) - \bigl(\theta_{-S_{t_{z_j}}}^{[t]} - \eta_t \bar{g}_{-S_{t_{z_j}}}^{[t]}\bigr) 
+	= \delta^{[t]} - \eta_t \bigl(\bar{g}^{[t]} - \bar{g}_{-S_{t_{z_j}}}^{[t]}\bigr). 
+\end{equation}
+
+To relate $\bar{g}_{-S_{t_{z_j}}}^{[t]}$ to $\bar{g}^{[t]}$, we apply a first-order Taylor expansion around $\theta^{[t]}$:
+\begin{equation} \label{eq:ta}
+	\bar{g}_{-S_{t_{z_j}}}^{[t]} = \frac{1}{|S_t|} \sum_{i \in S_t} \nabla_\theta \ell(z_i; \theta_{-S_{t_{z_j}}}^{[t]}) 
+	\approx \frac{1}{|S_t|} \sum_{i \in S_t} \left[ \nabla_\theta \ell(z_i; \theta^{[t]}) + \nabla^2_\theta \ell(z_i; \theta^{[t]}) \cdot (\theta_{-S_{t_{z_j}}}^{[t]} - \theta^{[t]}) \right] 
+	= \bar{g}^{[t]} - H^{[t]} \delta^{[t]},
+\end{equation}
+where $H^{[t]} := \frac{1}{|S_t|} \sum_{i \in S_t} \nabla^2_\theta \ell(z_i; \theta^{[t]})$ is the mini-batch Hessian.
+
+Substituting Eq.~\eqref{eq:ta} into Eq.~\eqref{eq:deviation_update}:
+\begin{equation}\label{eq:propagation}
+	\delta^{[t+1]} = \delta^{[t]} - \eta_t \bigl(\bar{g}^{[t]} - (\bar{g}^{[t]} - H^{[t]} \delta^{[t]})\bigr) 
+	= \delta^{[t]} - \eta_t H^{[t]} \delta^{[t]} 
+	= (I - \eta_t H^{[t]}) \delta^{[t]} 
+	= P^{[t]} \delta^{[t]}, 
+\end{equation}
+where $P^{[t]} := I - \eta_t H^{[t]}$ is the influence propagator defined in Section~\ref{subsec:influence_sample}.
+
+\paragraph{Cumulative Deviation}
+Unrolling the recursion in Eq.~\eqref{eq:propagation} from step $t_{z_j}+1$ to $\tau$:
+\begin{align}
+	\delta^{[\tau]} &= P^{[\tau-1]} \delta^{[\tau-1]} = P^{[\tau-1]} P^{[\tau-2]} \delta^{[\tau-2]}  = P^{[\tau-1]} P^{[\tau-2]} \cdots P^{[t_{z_j}+1]} \delta^{[t_{z_j}+1]} \\
+	&= P^{[t_{z_j}+1, \tau]} \cdot \delta^{[t_{z_j}+1]},
+\end{align}
+where $P^{[a,b]} := \prod_{s=a}^{b-1} P^{[s]} = P^{[b-1]} P^{[b-2]} \cdots P^{[a]}$ is the cumulative propagator, consistent with Section~\ref{subsec:influence_sample}.
+
+Substituting the initial deviation from Eq.~\eqref{eq:initial_batch}:
+\begin{equation}\label{eq:final_deviation}
+	\delta^{[\tau]} = P^{[t_{z_j}+1, \tau]} \cdot u^{[t_{z_j}]},
+\end{equation}
+which matches Eq.~\eqref{eq: mainbatch} in Section~\ref{subsec:influence_batch}.
+
+\paragraph{Comparison with Sample-Level Unlearning}
+The batch-level formulation differs from sample-level unlearning in the counterfactual model as shown in Table~\ref{tab:cmpsandb}.
+
+\begin{table}[h]
+	\centering
+	\caption{Comparison of sample-level and batch-level unlearning.}\label{tab:cmpsandb}
+	\begin{tabular}{lcc}
+		\toprule
+		& Sample-Level & Batch-Level \\
+		\midrule
+		Counterfactual at $t_{z_j}$ & Replace $z_j$'s contribution with zero-gradient & Skip entire step \\
+		Initial deviation & $\delta^{[t_{z_j}+1]} = -\frac{\eta_{t_{z_j}}}{|S_{t_{z_j}}|}  \nabla_\theta \ell(z_j; \theta^{[t_{z_j}]})$ & $\delta^{[t_{z_j}+1]} = u^{[t_{z_j}]}$ \\
+		Storage per step & $O(Bp)$ (per-sample gradients) & $O(p)$ (batch update) \\
+		Unlearning granularity & Single sample & Entire batch \\
+		\bottomrule
+	\end{tabular}
+\end{table}
+The propagation Eq.~\eqref{eq:propagation} is identical for both formulations, differing only in the initial deviation magnitude. Batch-level unlearning trades granularity for a $B\times$ reduction in storage, making it practical for large-scale applications.
+
+ 
+
+\clearpage
+\section{Detailed Theoretical Analysis}\label{app:theoretical_analysis}
+In this section, we provide the complete proofs and theoretical derivations supporting the LMCleaner framework. We structure the analysis into five parts: 1) regularity assumptions and linearization analysis; 2) proof of the contractive propagation lemma; 3) convergence bounds for the truncated approximation; 4) privacy guarantees via Rényi Differential Privacy; and 5) sequential composition and stability analysis.
+
+\subsection{Assumptions}\label{subsec:app_assumptions} 
+To establish rigorous bounds, we first formalize the standard smoothness and curvature properties of the loss landscape.
+\begin{assumption}[Smoothness and Hessian Continuity]\label{ass:smoothness}
+	The loss function $\ell(z; \theta)$ is twice continuously differentiable. Furthermore, the Hessian is $\rho$-Lipschitz continuous:
+	\begin{equation}
+		\|\nabla^2 \ell(z; \theta) - \nabla^2 \ell(z; \theta')\|_2 \le \rho \|\theta - \theta'\|_2, \quad \forall z \in \mathcal{Z}, \theta, \theta' \in \mathbb{R}^p.
+	\end{equation}
+\end{assumption}
+
+\begin{assumption}[Uniform Bounded Curvature]\label{ass:curvature}
+	For all steps $t$ within the unlearning window, the spectral norm of the mini-batch Hessian is bounded: $\|H^{[t]}\|_2 \le L$. The learning rates satisfy $\eta_t \le \eta_{\max}$ with $\eta_{\max} L < 2$.
+\end{assumption}
+
+\begin{assumption}[Positive Curvature in Expectation]\label{ass:positive_curvature}
+	The expected Hessian has bounded positive eigenvalues: $0 < \mu \le \lambda_{\min}(\mathbb{E}[H^{[t]}]) \le \lambda_{\max}(\mathbb{E}[H^{[t]}]) \le L$.
+\end{assumption}
+
+\begin{lemma}[Bounded Linearization Error]\label{lemma:linearization}
+	Let $\Delta^{[t]} = \|\theta^{[t]} - \theta^{[t]}_{\mathrm{ideal}}\|_2$. Under Assumption~\ref{ass:smoothness} and \ref{ass:curvature}, if the initial influence $\|\delta^{[t_{z_j}+1]}\|_2$ satisfies the stability condition $\|\delta^{[t_{z_j}+1]}\|_2 < \frac{1-\gamma}{2\eta_{\max}\rho}$, then the linearization error remains bounded. Specifically, the cumulative error satisfies a recurrence of the form $e_{t+1} \le \gamma e_t + \eta_{\max}\rho e_t^2$, which converges when the initial error is within the basin of attraction.
+\end{lemma}
+
+\begin{proof}
+	We prove this by induction. Let the error dynamics be governed by $\Delta^{[t+1]} \le \gamma \Delta^{[t]} + \eta_{\max}\rho (\Delta^{[t]})^2$.
+	
+	\textbf{Base case:} At $t=0$ (relative to unlearning start), $\Delta^{[0]} = \|\delta^{[t_{z_j}+1]}\|_2$. By hypothesis, $\Delta^{[0]} \le \frac{1-\gamma}{2\eta_{\max}\rho}$.
+	
+	\textbf{Inductive step:} Assume $\Delta^{[t]} \le \frac{1-\gamma}{2\eta_{\max}\rho}$. Then:
+	\begin{equation}
+		\Delta^{[t+1]} \le \Delta^{[t]} (\gamma + \eta_{\max}\rho \Delta^{[t]}) \le \Delta^{[t]} \left(\gamma + \frac{1-\gamma}{2}\right) = \Delta^{[t]} \frac{1+\gamma}{2}.
+	\end{equation}
+	Since $\gamma < 1$, we have $\frac{1+\gamma}{2} < 1$. Thus, the error strictly decreases monotonically, ensuring that the higher-order terms $\rho (\Delta^{[t]})^2$ never explode. This justifies treating the cumulative linearization constant $C_{\mathrm{lin}}$ as finite.
+\end{proof}
+ 
+\subsection{Proof of Contractive Propagation (Lemma~\ref{lemma:contractive})}\label{subsec:app_contractive}
+
+\begin{proof}
+	The influence propagator at step $t$ is $P^{[t]} = I - \eta_t H^{[t]}$. The spectral norm satisfies:
+	\begin{equation}
+		\|P^{[t]}\|_2 = \max_i |1 - \eta_t \lambda_i(H^{[t]})|,
+	\end{equation}
+	where $\lambda_i(H^{[t]})$ denotes the $i$-th eigenvalue of $H^{[t]}$.
+	
+	Under Assumption~\ref{ass:curvature}, we have $0 \le \lambda_i(H^{[t]}) \le L$. Under Assumption~\ref{ass:positive_curvature} and with appropriate learning rate selection $\eta_t \in [\eta_{\min}, \eta_{\max}]$ where $\eta_{\min} > 0$ and $\eta_{\max} L < 2$, the eigenvalues of $P^{[t]}$ lie in the interval:
+	\begin{equation}
+		1 - \eta_t \lambda_{\max}(H^{[t]}) \le \lambda_i(P^{[t]}) \le 1 - \eta_t \lambda_{\min}(H^{[t]}).
+	\end{equation}
+	
+	For the upper bound: $1 - \eta_t \lambda_{\min}(H^{[t]}) \le 1 - \eta_{\min} \mu < 1$.
+	
+	For the lower bound: $1 - \eta_t \lambda_{\max}(H^{[t]}) \ge 1 - \eta_{\max} L > -1$.
+	
+	Therefore, all eigenvalues of $P^{[t]}$ have absolute value strictly less than 1. Setting:
+	\begin{equation}
+		\gamma = \max\{1 - \eta_{\min} \mu, |1 - \eta_{\max} L|\} < 1,
+	\end{equation}
+	we obtain $\|P^{[t]}\|_2 \le \gamma$ for all $t$.
+	
+	\textit{Remark:} In practice, the contractivity factor $\gamma$ can be estimated via power iteration on sample batches. For non-convex regions where some eigenvalues may be negative, we employ a damped propagator $\tilde{P}^{[t]} = I - \eta_t (H^{[t]} + \lambda I)$ with regularization $\lambda \ge 0$, which ensures $\|\tilde{P}^{[t]}\|_2 \le 1$ while introducing a controlled bias.
+\end{proof}
+
+\subsection{Convergence Analysis (Proof of Theorem~\ref{thm:convergence})}\label{subsec:app_convergence}
+
+We first prove Proposition~\ref{prop:truncation_error}, then combine it with the linearization error to establish Theorem~\ref{thm:convergence}.
+
+\begin{proof}[Proof of Proposition~\ref{prop:truncation_error}]
+	Let $P^{[s]} = I - \eta_s H^{[s]}$. The full propagator decomposes as:
+	\begin{equation}
+		P^{[t_{z_j}+1, \tau]} = P^{[t_{z_j}+K^\star+1, \tau]} \cdot P^{[t_{z_j}+1, t_{z_j}+K^\star+1]}.
+	\end{equation}
+	
+	The truncated influence is $\delta^{[\tau]}_K = P^{[t_{z_j}+1, t_{z_j}+K^\star+1]} \cdot \delta^{[t_{z_j}+1]}$, while the full influence is $\delta^{[\tau]}_{\mathrm{full}} = P^{[t_{z_j}+K^\star+1, \tau]} \cdot \delta^{[\tau]}_K$.
+	
+	The truncation error is:
+	\begin{align}
+		\|\delta^{[\tau]}_{\mathrm{full}} - \delta^{[\tau]}_K\|_2 &= \|(P^{[t_{z_j}+K^\star+1, \tau]} - I) \delta^{[\tau]}_K\|_2 \\
+		&\le \|P^{[t_{z_j}+K^\star+1, \tau]} - I\|_2 \cdot \|\delta^{[\tau]}_K\|_2.
+	\end{align}
+	
+	For the first factor, using the telescoping identity $\prod_{i=1}^n A_i - I = \sum_{k=1}^n (\prod_{i=k+1}^n A_i)(A_k - I)$:
+	\begin{align}
+		\|P^{[a,b]} - I\|_2 &\le \sum_{s=a}^{b-1} \|P^{[s+1,b]}\|_2 \|P^{[s]} - I\|_2 \\
+		&\le \sum_{s=a}^{b-1} \gamma^{b-s-1} \cdot \eta_{\max} L \\
+		&\le \frac{\eta_{\max} L}{1-\gamma}.
+	\end{align}
+	
+	For the second factor, using the contractivity:
+	\begin{equation}
+		\|\delta^{[\tau]}_K\|_2 = \|P^{[t_{z_j}+1, t_{z_j}+K^\star+1]}\|_2 \|\delta^{[t_{z_j}+1]}\|_2 \le \gamma^{K^\star} \|\delta^{[t_{z_j}+1]}\|_2.
+	\end{equation}
+	
+	Combining these bounds:
+	\begin{equation}
+		\|\delta^{[\tau]}_{\mathrm{full}} - \delta^{[\tau]}_K\|_2 \le \frac{\eta_{\max} L}{1-\gamma} \gamma^{K^\star} \|\delta^{[t_{z_j}+1]}\|_2.
+	\end{equation}
+	
+	For the simplified bound in the main text, we note that $\eta_{\max} L < 2$ implies $\frac{\eta_{\max} L}{1-\gamma} = O(1/(1-\gamma))$, yielding the stated result.
+\end{proof}
+
+
+\begin{proof}[Proof of Theorem~\ref{thm:convergence}]
+	The total error decomposes into linearization and truncation components:
+	\begin{equation}
+		\|\theta^{[\tau]}_{\mathrm{ideal}} - \widehat{\theta}^{[\tau]}\|_2 \le \underbrace{\|\theta^{[\tau]}_{\mathrm{ideal}} - \theta^{[\tau]}_{\mathrm{lin}}\|_2}_{\text{Linearization error}} + \underbrace{\|\delta^{[\tau]}_{\mathrm{full}} - \delta^{[\tau]}_K\|_2}_{\text{Truncation error}},
+	\end{equation}
+	where $\theta^{[\tau]}_{\mathrm{lin}}$ is the result of applying the exact (non-truncated) linearized influence function.
+	
+	By Lemma~\ref{lemma:linearization}, the linearization error is bounded by $C_{\mathrm{lin}} \|\delta^{[t_{z_j}+1]}\|_2$.
+	
+	By Proposition~\ref{prop:truncation_error}, the truncation error is bounded by $\frac{\gamma^{K^\star}}{1-\gamma} \|\delta^{[t_{z_j}+1]}\|_2$.
+	
+	Combining these yields the stated bound:
+	\begin{equation}
+		\|\theta^{[\tau]}_{\mathrm{ideal}} - \widehat{\theta}^{[\tau]}\|_2 \le \Delta_{\mathrm{det}} = \left(C_{\mathrm{lin}} + \frac{\gamma^{K^\star}}{1-\gamma}\right) \|\delta^{[t_{z_j}+1]}\|_2.
+	\end{equation}
+\end{proof}
+
+\subsection{Privacy Guarantees (Proof of Theorem~\ref{thm:unlearning})}\label{subsec:app_privacy}
+We first establish the formal definition of certified unlearning, then prove the privacy guarantee using Rényi Differential Privacy.
+
+\begin{definition}[$(\varepsilon, \delta)$-Certified Unlearning]\label{def:unlearning_formal}
+	An unlearning algorithm $\mathcal{A}$ satisfies $(\varepsilon, \delta)$-certified unlearning if for any dataset $D$, any sample $z \in D$, and any measurable set $W \subseteq \mathbb{R}^p$, the following inequalities hold:
+	\begin{align}
+		\Pr[\mathcal{A}(D, z) \in W] &\le e^\varepsilon \Pr[\mathcal{R}(D \setminus \{z\}) \in W] + \delta, \\
+		\Pr[\mathcal{R}(D \setminus \{z\}) \in W] &\le e^\varepsilon \Pr[\mathcal{A}(D, z) \in W] + \delta.
+	\end{align}
+	This ensures that the unlearned model and the retrained model are statistically indistinguishable within the specified privacy budget.
+\end{definition}
+
+\begin{definition}[Rényi Differential Privacy]\label{def:rdp}
+	A mechanism $\mathcal{M}$ satisfies $(\alpha, \varepsilon_\alpha)$-RDP if for all adjacent inputs:
+	\begin{equation}
+		D_\alpha(\mathcal{M}(x) \| \mathcal{M}(x')) \le \varepsilon_\alpha,
+	\end{equation}
+	where $D_\alpha(P\|Q) = \frac{1}{\alpha-1} \log \mathbb{E}_{x\sim Q}[(P(x)/Q(x))^\alpha]$ is the Rényi divergence of order $\alpha$.
+\end{definition}
+
+\begin{proof}[Proof of Theorem~\ref{thm:unlearning}]
+	\textbf{Step 1: RDP Analysis.}
+	Let $\mathcal{M}$ denote our mechanism that outputs $\widetilde{\theta} = \widehat{\theta} + \xi$ where $\xi \sim \mathcal{N}(0, \sigma^2 I)$. Let $\mathcal{M}_{\mathrm{ideal}}$ output $\widetilde{\theta}_{\mathrm{ideal}} = \theta_{\mathrm{ideal}} + \xi'$ where $\xi' \sim \mathcal{N}(0, \sigma^2 I)$.
+	
+	For Gaussian distributions with the same covariance, the Rényi divergence is:
+	\begin{equation}
+		D_\alpha(\mathcal{N}(\mu_1, \Sigma) \| \mathcal{N}(\mu_2, \Sigma)) = \frac{\alpha}{2} (\mu_1 - \mu_2)^\top \Sigma^{-1} (\mu_1 - \mu_2) = \frac{\alpha \|\mu_1 - \mu_2\|_2^2}{2\sigma^2}.
+	\end{equation}
+	
+	Using our error bound $\|\widehat{\theta} - \theta_{\mathrm{ideal}}\|_2 \le \Delta_{\mathrm{det}}$:
+	\begin{equation}
+		D_\alpha(\mathcal{M} \| \mathcal{M}_{\mathrm{ideal}}) \le \frac{\alpha \Delta_{\mathrm{det}}^2}{2\sigma^2} := \varepsilon_\alpha.
+		\end{equation}
+		
+		\textbf{Step 2: Conversion to $(\varepsilon, \delta)$-Unlearning.}
+		By the RDP-to-DP conversion lemma~\citep{mironov2017renyi}, an $(\alpha, \varepsilon_\alpha)$-RDP mechanism satisfies $(\varepsilon, \delta)$-DP where:
+		\begin{equation}
+		\varepsilon = \varepsilon_\alpha + \frac{\log(1/\delta)}{\alpha - 1}.
+		\end{equation}
+		
+		\textbf{Step 3: Optimal $\alpha$ Selection.}
+		Substituting $\varepsilon_\alpha = \frac{\alpha \Delta_{\mathrm{det}}^2}{2\sigma^2}$ and minimizing over $\alpha > 1$:
+		\begin{equation}
+		\varepsilon = \frac{\alpha \Delta_{\mathrm{det}}^2}{2\sigma^2} + \frac{\log(1/\delta)}{\alpha - 1}.
+		\end{equation}
+		
+		Taking derivative and setting to zero yields optimal $\alpha^\star$. For the standard Gaussian mechanism analysis, this gives:
+		\begin{equation}
+		\varepsilon \le \frac{\Delta_{\mathrm{det}}}{\sigma} \sqrt{2\log(1.25/\delta)}.
+		\end{equation}
+		
+		Rearranging, to achieve $(\varepsilon, \delta)$-certified unlearning, we require:
+		\begin{equation}
+		\sigma \ge \frac{\Delta_{\mathrm{det}}}{\varepsilon} \sqrt{2\log(1.25/\delta)}.
+		\end{equation}
+	\end{proof}
+
+\subsection{Sequential Composition (Proof of Theorem~\ref{thm:sequential})}\label{subsec:app_sequential}
+
+\begin{proof}
+	\textbf{Step 1: RDP Composition.}
+	For $M$ mechanisms where the $i$-th mechanism satisfies $(\alpha, \varepsilon_\alpha^{(i)})$-RDP, the composed mechanism satisfies $(\alpha, \sum_{i=1}^M \varepsilon_\alpha^{(i)})$-RDP by the linear composition property of Rényi divergence.
+	
+	\textbf{Step 2: Individual RDP Budgets.}
+	From the proof of Theorem~\ref{thm:unlearning}, the $i$-th unlearning operation with noise $\sigma_i$ satisfies $(\alpha, \varepsilon_\alpha^{(i)})$-RDP where $\varepsilon_\alpha^{(i)} = \frac{\alpha (\Delta_{\mathrm{det}}^{(i)})^2}{2\sigma_i^2}$.
+	
+	\textbf{Step 3: Conversion to $(\varepsilon, \delta)$.}
+	The composed mechanism satisfies $(\alpha, \varepsilon_\alpha^{\mathrm{total}})$-RDP with $\varepsilon_\alpha^{\mathrm{total}} = \sum_{i=1}^M \varepsilon_\alpha^{(i)}$.
+	
+	Using the advanced composition theorem for RDP~\citep{mironov2017renyi}:
+	\begin{equation}
+		\varepsilon_{\mathrm{total}} = \min_{\alpha > 1} \left\{ \varepsilon_\alpha^{\mathrm{total}} + \frac{\log(1/\delta')}{\alpha - 1} \right\}.
+	\end{equation}
+	
+	For the case where each individual operation achieves $(\varepsilon_i, \delta_i)$-unlearning (converted from its RDP guarantee), the total guarantee satisfies:
+	\begin{equation}
+		\varepsilon_{\mathrm{total}} \le \sum_{i=1}^M \varepsilon_i + \sqrt{2\log(1/\delta') \sum_{i=1}^M \varepsilon_i^2},
+	\end{equation}
+	with $\delta_{\mathrm{total}} = \sum_{i=1}^M \delta_i + \delta'$.
+	
+	This advanced composition bound follows from the moments accountant analysis and provides sublinear growth in the privacy budget.
+\end{proof}
+
+\textbf{Utility Stability Analysis.}
+Beyond privacy, we must ensure that approximation errors do not accumulate unboundedly. Let $e_i = \Delta_{\mathrm{det}}^{(i)}$ be the approximation error from the $i$-th deletion at step $t_i$. Due to the contractivity (Lemma~\ref{lemma:contractive}), the error contribution from deletion $i$ decays geometrically as $\gamma^{\tau - t_i} e_i$ by step $\tau$.
+
+The total accumulated error at any step $\tau$ is:
+\begin{equation}
+	E_{\mathrm{total}}(\tau) = \sum_{i: t_i < \tau} \gamma^{\tau - t_i} e_i \le \sum_{i=1}^M \gamma^{i-1} \max_j(e_j) \le \frac{\max_i(e_i)}{1-\gamma}.
+\end{equation}
+
+This geometric series converges, ensuring that LMCleaner remains numerically stable under continuous operation without error divergence, as long as individual approximation errors remain bounded.
+
+\clearpage
+
+\section{Limitations }\label{app:limitations}
+\paragraph{Contractivity Assumption.}
+Our theoretical guarantees rely on the contractivity of optimization dynamics (Lemma~\ref{lemma:contractive}). While this assumption holds in locally convex regions near convergence, it may be violated during early training or in highly non-convex landscapes. The damped propagator (Appendix~\ref{subsec:app_damped}) provides a practical workaround but introduces additional approximation bias.
+
+\paragraph{Storage Requirements.}
+Although batch-level logging reduces storage from $O(Np)$ to $O(Tp)$, the absolute storage requirement remains substantial for very long training runs. For LLaMA-2-7B with 3,600 steps, this amounts to approximately 50 TB. Compression techniques or selective logging could further reduce this overhead.
+
+\paragraph{Hessian Approximation.}
+Computing exact Hessian-vector products requires access to the training data and intermediate activations. When only batch indices are stored, we must reload the data and recompute forward passes, adding I/O overhead. Using the current parameters as a surrogate for historical parameters introduces approximation error.
+
+
+\end{document}
+
+% This document was modified from the file originally made available by
+% Pat Langley and Andrea Danyluk for ICML-2K. This version was created
+% by Iain Murray in 2018, and modified by Alexandre Bouchard in
+% 2019 and 2021 and by Csaba Szepesvari, Gang Niu and Sivan Sabato in 2022.
+% Modified again in 2023 and 2024 by Sivan Sabato and Jonathan Scarlett.
+% Previous contributors include Dan Roy, Lise Getoor and Tobias
+% Scheffer, which was slightly modified from the 2010 version by
+% Thorsten Joachims & Johannes Fuernkranz, slightly modified from the
+% 2009 version by Kiri Wagstaff and Sam Roweis's 2008 version, which is
+% slightly modified from Prasad Tadepalli's 2007 version which is a
+% lightly changed version of the previous year's version by Andrew
+% Moore, which was in turn edited from those of Kristian Kersting and
+% Codrina Lauth. Alex Smola contributed to the algorithmic style files.
