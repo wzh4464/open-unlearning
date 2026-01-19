@@ -226,6 +226,58 @@ class LazyRecordLoader:
         records = self.load_steps([step_id], include_tensors=include_tensors)
         return records[0] if records else None
 
+    def get_etas_for_steps(self, step_ids: List[int]) -> Dict[int, float]:
+        """
+        获取指定步骤的 eta (learning rate) 值，使用缓存避免重复加载
+
+        Args:
+            step_ids: 步骤 ID 列表
+
+        Returns:
+            step_id -> eta 的映射字典
+        """
+        # 初始化缓存
+        if self._eta_cache is None:
+            self._eta_cache = {}
+            # 尝试加载持久化的 eta 缓存
+            eta_cache_file = self.log_dir / "eta_cache.json"
+            if eta_cache_file.exists():
+                try:
+                    with open(eta_cache_file, "r") as f:
+                        self._eta_cache = {int(k): v for k, v in json.load(f).items()}
+                    logger.info(f"Loaded eta cache with {len(self._eta_cache)} entries")
+                except Exception as e:
+                    logger.warning(f"Failed to load eta cache: {e}")
+
+        # 找出缓存中没有的步骤
+        missing_steps = [s for s in step_ids if s not in self._eta_cache]
+
+        if missing_steps:
+            logger.info(f"Loading eta for {len(missing_steps)} missing steps...")
+            self._load_etas_on_demand(missing_steps)
+
+        return {s: self._eta_cache[s] for s in step_ids if s in self._eta_cache}
+
+    def _load_etas_on_demand(self, step_ids: List[int]) -> None:
+        """按需加载 eta 值并更新缓存"""
+        # 加载不含 tensor 的记录来获取 eta
+        records = self.load_steps(step_ids, include_tensors=False)
+
+        for rec in records:
+            step_id = rec["step_id"]
+            eta = rec.get("eta")
+            if eta is not None:
+                self._eta_cache[step_id] = eta
+
+        # 增量保存到持久化缓存
+        eta_cache_file = self.log_dir / "eta_cache.json"
+        try:
+            with open(eta_cache_file, "w") as f:
+                json.dump(self._eta_cache, f)
+            logger.debug(f"Saved eta cache with {len(self._eta_cache)} entries")
+        except Exception as e:
+            logger.warning(f"Failed to save eta cache: {e}")
+
 
 class TrainingLogger:
     """
