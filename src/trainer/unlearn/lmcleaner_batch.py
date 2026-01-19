@@ -119,9 +119,14 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         """
         forget_batch_ids = []
 
-        if hasattr(self.train_dataset, "forget_dataset"):
-            forget_ds = self.train_dataset.forget_dataset
+        # 尝试多种属性名获取 forget 数据集
+        forget_ds = None
+        for attr in ["forget_dataset", "forget"]:
+            if hasattr(self.train_dataset, attr):
+                forget_ds = getattr(self.train_dataset, attr)
+                break
 
+        if forget_ds is not None:
             # 如果数据集有batch_id属性
             if hasattr(forget_ds, "batch_ids"):
                 forget_batch_ids = forget_ds.batch_ids
@@ -142,22 +147,40 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         获取forget批次对应的训练步骤
 
         Args:
-            forget_batch_ids: 批次ID列表
+            forget_batch_ids: 批次ID列表 (实际上是样本索引)
 
         Returns:
             步骤ID列表
         """
         forget_steps = []
+        forget_set = set(forget_batch_ids)
 
-        for batch_id in forget_batch_ids:
-            step_id = self.training_logger.get_batch_step(batch_id)
-            if step_id is not None:
-                forget_steps.append(step_id)
-            else:
-                logger.warning(f"Batch {batch_id} not found in training log")
+        # 优先使用 lazy_loader.sample_indices 来查找包含 forget 样本的步骤
+        sample_indices = None
+        if hasattr(self, "lazy_loader") and hasattr(self.lazy_loader, "sample_indices"):
+            sample_indices = self.lazy_loader.sample_indices
+        elif hasattr(self.training_logger, "sample_indices_per_step"):
+            sample_indices = self.training_logger.sample_indices_per_step
 
-        logger.info(f"Found {len(forget_steps)} forget steps")
-        return forget_steps
+        if sample_indices:
+            for step_id, sample_list in sample_indices.items():
+                step_id_int = int(step_id) if isinstance(step_id, str) else step_id
+                for sample_idx in sample_list:
+                    if sample_idx in forget_set:
+                        forget_steps.append(step_id_int)
+                        break  # 只需要知道这个步骤包含 forget 样本
+            logger.info(f"Found {len(forget_steps)} forget steps via sample_indices")
+        else:
+            # 回退到旧的 batch_index 查找方式
+            for batch_id in forget_batch_ids:
+                step_id = self.training_logger.get_batch_step(batch_id)
+                if step_id is not None:
+                    forget_steps.append(step_id)
+                else:
+                    logger.debug(f"Batch {batch_id} not found in training log")
+            logger.info(f"Found {len(forget_steps)} forget steps via batch_index")
+
+        return sorted(set(forget_steps))  # 去重并排序
 
     def _apply_unlearning(self):
         """
