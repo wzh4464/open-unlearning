@@ -80,6 +80,9 @@ class LazyRecordLoader:
         self._chunk_index: Dict[str, tuple] = {}
         self._step_to_chunk: Dict[int, str] = {}  # step_id -> chunk_file
 
+        # Eta 缓存: step_id -> eta
+        self._eta_cache: Optional[Dict[int, float]] = None
+
     def build_index(self) -> None:
         """构建 chunk 索引，从文件名解析 step_id（无需读取文件内容）"""
         import re
@@ -858,6 +861,18 @@ class TrainingLogger:
         if hasattr(self.step_log, 'step_map'):
             self.step_log.step_map.clear()
 
+        # 加载样本索引(轻存储模式) - 需要在所有情况下加载用于批次重建
+        # sample_indices 是小的 JSON 文件，不会导致内存问题
+        indices_file = self.log_dir / "sample_indices.json"
+        if indices_file.exists():
+            with open(indices_file, "r") as f:
+                serializable_indices = json.load(f)
+                # Convert string keys back to int
+                self.sample_indices_per_step = {
+                    int(k): v for k, v in serializable_indices.items()
+                }
+            logger.info(f"Loaded sample_indices for {len(self.sample_indices_per_step)} steps")
+
         # Only load tensors if explicitly requested (for analysis/debugging)
         if not load_tensors:
             logger.info(
@@ -867,16 +882,6 @@ class TrainingLogger:
             return
 
         # Below: only executed if load_tensors=True (for backward compatibility or debugging)
-
-        # 加载样本索引(轻存储模式)
-        indices_file = self.log_dir / "sample_indices.json"
-        if indices_file.exists():
-            with open(indices_file, "r") as f:
-                serializable_indices = json.load(f)
-                # Convert string keys back to int
-                self.sample_indices_per_step = {
-                    int(k): v for k, v in serializable_indices.items()
-                }
 
         # 加载RNG状态
         if step_id is None:
