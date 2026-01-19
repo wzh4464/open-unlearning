@@ -150,3 +150,107 @@ mkdir -p "$TMPDIR/claude"
 ```
 
 This ensures temporary files created during training and evaluation are stored in a dedicated directory.
+
+## Lessons Learned
+
+### Hydra Configuration Patterns
+
+1. **Config Override Syntax**:
+   - Use dot notation for nested configs: `trainer.method_args.K=1000`
+   - Use `++` prefix to add new keys: `++trainer.args.bf16=true`
+   - Nested dict syntax in CLI: `model.model_args.pretrained_model_name_or_path=path/to/model`
+
+2. **Trainer Configuration**:
+   - Trainer configs define `_target_` class and `method_args`
+   - `method_args` are passed to trainer constructor
+   - HuggingFace Trainer args go in `trainer.args`
+
+3. **Dataset Configuration**:
+   - `forget_split` and `retain_split` control data splits
+   - ForgetRetainDataset wraps forget/retain datasets with different indexing
+   - Original finetune dataset must be loaded separately for batch reconstruction
+
+### Memory Optimization for Large-Scale Training
+
+1. **Lazy Loading Pattern**:
+   - Never load all training records into memory at once
+   - Use `LazyRecordLoader` to load records on-demand
+   - Delete tensors immediately after use: `del tensor; gc.collect()`
+
+2. **Chunk File Organization**:
+   - Store each step's record in separate `.pkl` file
+   - Build index from filenames (no need to read file contents)
+   - Use parallel loading with `ProcessPoolExecutor` for metadata extraction
+
+3. **Eta (Learning Rate) Caching**:
+   - Store eta values in separate JSON cache file
+   - Load eta cache at startup, update incrementally
+   - Avoids loading 2.4GB chunk files just for a single float
+
+4. **GPU Memory Management**:
+   - Use `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:64`
+   - Enable `gradient_checkpointing=true` for large models
+   - Move data to GPU only when needed, release immediately after
+
+### LMCleaner Implementation Details
+
+1. **Batch Reconstruction Priority**:
+   - In lazy loading mode, check `sample_indices` first (not `step_record`)
+   - `sample_indices` is loaded as small JSON, `step_record` requires full chunk
+
+2. **HVP Computation**:
+   - Requires batch data reconstruction from original dataset
+   - ForgetRetainDataset indices differ from finetune dataset indices
+   - Must use original finetune dataset (e.g., `locuslab/TOFU/full`) for batch reconstruction
+
+3. **Forward Propagation**:
+   - For step tz, propagate through steps tz+1 to min(tz+K, tau-1)
+   - Each propagation step requires: load eta, reconstruct batch, compute HVP
+   - Total HVP calls per forget step can be up to K (e.g., 1000)
+
+4. **Dataset Mismatch Issue**:
+   - Training uses TOFU full dataset (4000 samples, indices 0-3999)
+   - Unlearning uses ForgetRetainDataset with different indexing
+   - Solution: Load original finetune dataset with `SimpleQADataset` wrapper
+
+### Parallel Processing Best Practices
+
+1. **Multi-GPU Unlearning**:
+   - Use `CUDA_VISIBLE_DEVICES` to assign each epoch to different GPU
+   - Run epochs in parallel with independent processes
+   - Shared eta cache is safe (read-only after initial build)
+
+2. **Parallel Cache Building**:
+   - Use `ProcessPoolExecutor` with many workers (e.g., 32)
+   - Load pickle files in parallel, extract metadata only
+   - Incremental save to avoid losing progress on failure
+
+3. **Background Process Management**:
+   - Use `nohup bash script.sh > log 2>&1 &` for long-running jobs
+   - Monitor with `tail -f` and process count checks
+   - Use `pkill -9 -f pattern` to kill stuck processes
+
+### Common Debugging Patterns
+
+1. **Check GPU Utilization**:
+   ```bash
+   nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader
+   ```
+   - 0% utilization often means computation is CPU-bound or I/O-bound
+
+2. **Identify Bottlenecks**:
+   - `K_used=0, hvp_calls=0` in logs means batch reconstruction failed
+   - Check `sample_indices_per_step` is loaded in lazy loading mode
+   - Verify dataset indexing matches training-time indexing
+
+3. **Log Analysis**:
+   ```bash
+   grep "Applied correction" log.file | tail -5  # Check HVP execution
+   grep "Processing forget step" log.file | tail -1  # Check progress
+   ```
+
+4. **Memory Monitoring**:
+   ```bash
+   free -h  # System memory
+   ps aux | grep python | awk '{sum += $6} END {print sum/1024/1024, "GB"}'
+   ```
