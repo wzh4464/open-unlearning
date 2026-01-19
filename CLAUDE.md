@@ -10,23 +10,22 @@ Open-Unlearning is a unified framework for LLM unlearning research that supports
 
 ### Environment Setup
 
-**IMPORTANT**: This project uses `uv` for environment management. Always use `uv` commands instead of pip/conda.
+This project can use either `uv` or standard Python/pip for environment management.
 
 ```bash
-# Install dependencies with uv
+# Option 1: Using uv (recommended for reproducible builds)
 uv sync                          # Install all dependencies from lock file
 uv sync --extra lm_eval          # Include lm-evaluation-harness
 uv sync --extra dev              # Include development tools (ruff, pre-commit)
-uv sync --extra linux-cuda       # For Linux with CUDA support
-uv sync --extra macos-mps        # For macOS with MPS support
 
-# Add new dependencies
-uv add package-name              # Add a new package
-uv add --dev package-name        # Add a development dependency
+# Option 2: Using pip directly
+pip install -e .                 # Install in editable mode
+pip install -e ".[lm_eval]"      # Include lm-evaluation-harness
+pip install -e ".[dev]"          # Include development tools
 
-# Run Python scripts with uv
-uv run python setup_data.py --eval    # Download evaluation data
-uv run python src/train.py ...        # Run training scripts
+# Run Python scripts (use python directly, not uv run)
+python setup_data.py --eval      # Download evaluation data
+python src/train.py ...          # Run training scripts
 ```
 
 ### Code Quality and Testing
@@ -46,16 +45,16 @@ make test
 ### Training and Evaluation
 
 ```bash
-# Run unlearning training (use uv run)
-uv run python src/train.py --config-name=unlearn.yaml experiment=unlearn/tofu/default \
+# Run unlearning training
+python src/train.py --config-name=unlearn.yaml experiment=unlearn/tofu/default \
   forget_split=forget10 retain_split=retain90 trainer=GradAscent task_name=SAMPLE_UNLEARN
 
 # Run evaluation
-uv run python src/eval.py --config-name=eval.yaml experiment=eval/tofu/default \
+python src/eval.py --config-name=eval.yaml experiment=eval/tofu/default \
   model=Llama-3.2-1B-Instruct task_name=SAMPLE_EVAL
 
 # Run distributed training
-CUDA_VISIBLE_DEVICES=0,1 uv run accelerate launch \
+CUDA_VISIBLE_DEVICES=0,1 accelerate launch \
   --config_file configs/accelerate/default_config.yaml --main_process_port 18765 \
   src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default task_name=DISTRIBUTED_TRAIN
 
