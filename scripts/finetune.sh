@@ -6,6 +6,10 @@
 set -e
 source "$(dirname "$0")/env.sh"
 
+# Force single GPU to ensure consistent step count (1250 steps for 5 epochs)
+# Without this, multi-GPU data parallel will reduce steps proportionally
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-3}
+
 # Parse model selection
 MODEL=""
 MODEL_NAME=""
@@ -96,7 +100,7 @@ $PYTHON_CMD src/train.py --config-name=train.yaml \
     +trainer.args.training_logger.steps_per_epoch=${STEPS_PER_EPOCH} \
     +trainer.args.training_logger.save_at_epoch_end=true \
     +trainer.args.spectral_norm.enabled=true \
-    +trainer.args.spectral_norm.interval=50 \
+    +trainer.args.spectral_norm.interval=1 \
     +trainer.args.spectral_norm.num_power_iters=20 \
     +trainer.args.spectral_norm.output_dir="${LOG_DIR}" \
     ${RESUME_ARG:+$RESUME_ARG} \
