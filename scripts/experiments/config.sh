@@ -15,9 +15,12 @@ TRAINING_LOG_DIR="saves/train_logs/${MODEL_SHORT}_tofu_safe"
 # ============================================
 # Experiment Configuration
 # ============================================
-# Epoch to checkpoint step mapping (250 steps per epoch)
+# Steps per epoch (used for checkpoint calculation)
+STEPS_PER_EPOCH=250
+
+# Epoch to checkpoint step mapping
 EPOCHS=(1 2 3 4 5)
-CHECKPOINTS=(250 500 750 1000 1250)
+CHECKPOINTS=(250 500 750 1000 1250)  # = EPOCHS * STEPS_PER_EPOCH
 
 # Data splits
 FORGET_SPLIT="forget10"
@@ -48,14 +51,9 @@ GRADIENT_ACCUMULATION_STEPS=8
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:64
 export HF_HUB_DISABLE_TELEMETRY=1
 
-# Python command (docker vs local)
-if [ -n "$IN_DOCKER" ]; then
-    PYTHON_CMD="python"
-    ACCELERATE_CMD="accelerate"
-else
-    PYTHON_CMD="python"
-    ACCELERATE_CMD="accelerate"
-fi
+# Python commands
+PYTHON_CMD="python"
+ACCELERATE_CMD="accelerate"
 
 # ============================================
 # Helper Functions
@@ -64,7 +62,7 @@ fi
 # Get checkpoint path for a given epoch
 get_checkpoint_path() {
     local epoch=$1
-    local step=$((epoch * 250))
+    local step=$((epoch * STEPS_PER_EPOCH))
     echo "${FINETUNE_DIR}/checkpoint-${step}"
 }
 

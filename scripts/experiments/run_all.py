@@ -22,7 +22,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional
 from enum import Enum
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import threading
 import json
 
@@ -56,6 +56,7 @@ class GPUScheduler:
         self.gpu_locks = {gpu: threading.Lock() for gpu in gpus}
         self.available_gpus = set(gpus)
         self.gpu_lock = threading.Lock()
+        self.task_lock = threading.Lock()  # Lock for thread-safe task status updates
 
         self.log_dir.mkdir(parents=True, exist_ok=True)
 
@@ -102,20 +103,33 @@ class GPUScheduler:
             self.available_gpus.add(gpu_id)
 
     def can_run(self, task: Task) -> bool:
-        """Check if all dependencies are completed."""
-        for dep_name in task.depends_on:
-            if dep_name not in self.tasks:
-                continue
-            dep_task = self.tasks[dep_name]
-            if dep_task.status not in [TaskStatus.COMPLETED, TaskStatus.SKIPPED]:
-                return False
-        return True
+        """Check if all dependencies are completed (or skipped)."""
+        with self.task_lock:
+            for dep_name in task.depends_on:
+                if dep_name not in self.tasks:
+                    continue
+                dep_task = self.tasks[dep_name]
+                if dep_task.status not in [TaskStatus.COMPLETED, TaskStatus.SKIPPED]:
+                    return False
+            return True
+
+    def has_failed_dependency(self, task: Task) -> bool:
+        """Check if any dependency has failed."""
+        with self.task_lock:
+            for dep_name in task.depends_on:
+                if dep_name not in self.tasks:
+                    continue
+                dep_task = self.tasks[dep_name]
+                if dep_task.status == TaskStatus.FAILED:
+                    return True
+            return False
 
     def run_task(self, task: Task, gpu_id: int) -> int:
         """Run a single task on a specific GPU."""
-        task.gpu_id = gpu_id
-        task.status = TaskStatus.RUNNING
-        task.log_file = str(self.log_dir / f"{task.name}.log")
+        with self.task_lock:
+            task.gpu_id = gpu_id
+            task.status = TaskStatus.RUNNING
+            task.log_file = str(self.log_dir / f"{task.name}.log")
 
         script_path = self.script_dir / task.script
 
@@ -128,12 +142,12 @@ class GPUScheduler:
 
         try:
             with open(task.log_file, "w") as log_f:
+                # Pass GPU ID as argument; scripts handle CUDA_VISIBLE_DEVICES internally
                 process = subprocess.run(
                     ["bash", str(script_path), str(gpu_id)],
                     stdout=log_f,
                     stderr=subprocess.STDOUT,
                     cwd=self.script_dir.parent.parent,  # Project root
-                    env={**os.environ, "CUDA_VISIBLE_DEVICES": str(gpu_id)}
                 )
                 return process.returncode
         except Exception as e:
@@ -165,13 +179,22 @@ class GPUScheduler:
             futures = {}
 
             while completed_count < total_tasks:
+                # Mark tasks with failed dependencies as skipped
+                for name, task in self.tasks.items():
+                    with self.task_lock:
+                        if task.status == TaskStatus.PENDING and self.has_failed_dependency(task):
+                            task.status = TaskStatus.SKIPPED
+                            print(f"[SKIPPED] {task.name}: dependency failed")
+                            completed_count += 1
+
                 # Find tasks that can run
                 for name, task in self.tasks.items():
-                    if task.status == TaskStatus.PENDING and self.can_run(task):
-                        gpu_id = self.acquire_gpu()
-                        if gpu_id is not None:
-                            future = executor.submit(self.run_task, task, gpu_id)
-                            futures[future] = (task, gpu_id)
+                    with self.task_lock:
+                        if task.status == TaskStatus.PENDING and self.can_run(task):
+                            gpu_id = self.acquire_gpu()
+                            if gpu_id is not None:
+                                future = executor.submit(self.run_task, task, gpu_id)
+                                futures[future] = (task, gpu_id)
 
                 # Check for completed tasks
                 if futures:
@@ -181,16 +204,18 @@ class GPUScheduler:
                             task, gpu_id = futures[future]
                             try:
                                 return_code = future.result()
-                                task.return_code = return_code
-                                if return_code == 0:
-                                    task.status = TaskStatus.COMPLETED
-                                    print(f"[GPU {gpu_id}] Completed: {task.name}")
-                                else:
-                                    task.status = TaskStatus.FAILED
-                                    print(f"[GPU {gpu_id}] FAILED: {task.name} (exit code: {return_code})")
-                                    print(f"  See log: {task.log_file}")
+                                with self.task_lock:
+                                    task.return_code = return_code
+                                    if return_code == 0:
+                                        task.status = TaskStatus.COMPLETED
+                                        print(f"[GPU {gpu_id}] Completed: {task.name}")
+                                    else:
+                                        task.status = TaskStatus.FAILED
+                                        print(f"[GPU {gpu_id}] FAILED: {task.name} (exit code: {return_code})")
+                                        print(f"  See log: {task.log_file}")
                             except Exception as e:
-                                task.status = TaskStatus.FAILED
+                                with self.task_lock:
+                                    task.status = TaskStatus.FAILED
                                 print(f"[GPU {gpu_id}] ERROR: {task.name}: {e}")
 
                             self.release_gpu(gpu_id)
@@ -242,6 +267,16 @@ class GPUScheduler:
         return len(failed) == 0
 
 
+def parse_int_list(value: str, name: str) -> list[int]:
+    """Parse comma-separated integers with validation."""
+    try:
+        return [int(x.strip()) for x in value.split(",") if x.strip()]
+    except ValueError as e:
+        print(f"Error: Invalid {name} format '{value}'. Expected comma-separated integers.")
+        print(f"  Example: --{name} 0,1,2,3")
+        sys.exit(1)
+
+
 def main():
     parser = argparse.ArgumentParser(description="GPU Scheduler for Experiment Scripts")
     parser.add_argument("--dry-run", action="store_true", help="Preview without running")
@@ -254,13 +289,49 @@ def main():
     parser.add_argument("--skip-mia", action="store_true", help="Skip MIA evaluation")
     args = parser.parse_args()
 
-    # Parse arguments
-    gpus = [int(x) for x in args.gpus.split(",")]
-    epochs = [int(x) for x in args.epochs.split(",")]
+    # Parse arguments with validation
+    gpus = parse_int_list(args.gpus, "gpus")
+    epochs = parse_int_list(args.epochs, "epochs")
+
+    if not gpus:
+        print("Error: No GPUs specified. Use --gpus with comma-separated GPU IDs.")
+        sys.exit(1)
+
+    if not epochs:
+        print("Error: No epochs specified. Use --epochs with comma-separated epoch numbers.")
+        sys.exit(1)
+
+    # Check if all skip flags are set
+    all_skipped = (args.skip_finetune and args.skip_lmcleaner and
+                   args.skip_baselines and args.skip_eval and args.skip_mia)
+    if all_skipped:
+        print("Warning: All skip flags are set. No tasks will be scheduled.")
+        print("Remove some --skip-* flags to run experiments.")
+        sys.exit(0)
 
     # Setup paths
     script_dir = Path(__file__).parent
     log_dir = script_dir.parent.parent / "saves" / "scheduler_logs"
+
+    # Validate epoch script files exist
+    missing_scripts = []
+    for epoch in epochs:
+        if not args.skip_lmcleaner:
+            script_path = script_dir / f"02_lmcleaner_epoch{epoch}.sh"
+            if not script_path.exists():
+                missing_scripts.append(f"02_lmcleaner_epoch{epoch}.sh")
+        if not args.skip_baselines:
+            script_path = script_dir / f"03_baseline_epoch{epoch}.sh"
+            if not script_path.exists():
+                missing_scripts.append(f"03_baseline_epoch{epoch}.sh")
+
+    if missing_scripts:
+        print("Error: The following script files are missing:")
+        for script in missing_scripts:
+            print(f"  - {script}")
+        print(f"\nAvailable epochs have scripts: 1-5")
+        print("Use --epochs to specify valid epochs (e.g., --epochs 1,2,3)")
+        sys.exit(1)
 
     # Create scheduler
     scheduler = GPUScheduler(gpus, script_dir, log_dir, dry_run=args.dry_run)
@@ -307,7 +378,7 @@ def main():
             mia_deps.extend([f"baseline_epoch{e}" for e in epochs])
 
         if mia_deps:
-            scheduler.add_task("eval_mia", "05_eval_tofu_mia.sh", depends_on=mia_deps)
+            scheduler.add_task("eval_tofu_mia", "05_eval_tofu_mia.sh", depends_on=mia_deps)
 
     # Run all tasks
     success = scheduler.run_all()

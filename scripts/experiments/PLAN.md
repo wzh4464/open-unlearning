@@ -25,9 +25,9 @@ scripts/experiments/
 ```bash
 # 模型配置 - 修改这里即可切换模型
 MODEL_NAME="Llama-3.2-1B-Instruct"
-MODEL_SHORT="llama32"
-FINETUNE_DIR="saves/finetune/llama32_1b_tofu_safe"
-TRAINING_LOG_DIR="saves/train_logs/llama32_1b_tofu_safe"
+MODEL_SHORT="llama32_1b"
+FINETUNE_DIR="saves/finetune/${MODEL_SHORT}_tofu_safe"
+TRAINING_LOG_DIR="saves/train_logs/${MODEL_SHORT}_tofu_safe"
 
 # 实验配置
 EPOCHS=(1 2 3 4 5)

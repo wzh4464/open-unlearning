@@ -132,11 +132,17 @@ python run_all.py --gpus 0,1 --skip-finetune --epochs 1,2,3
 The scheduler respects these dependencies:
 ```
 finetune
-    ├── lmcleaner_epoch{1-5}
-    └── baseline_epoch{1-5}
-            ├── eval_tofu
-            └── eval_mia
+    ├── lmcleaner_epoch{1-5} ──┐
+    └── baseline_epoch{1-5} ──┼── eval_tofu ── eval_tofu_mia
+                              └────────────────────┘
 ```
+
+In detail:
+- `finetune`: No dependencies (runs first)
+- `lmcleaner_epoch{1-5}`: Depends on `finetune`
+- `baseline_epoch{1-5}`: Depends on `finetune`
+- `eval_tofu`: Depends on ALL `lmcleaner_epoch{1-5}` AND `baseline_epoch{1-5}`
+- `eval_tofu_mia`: Depends on `eval_tofu` AND ALL unlearning tasks
 
 ## Manual Execution
 

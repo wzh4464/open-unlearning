@@ -52,7 +52,7 @@ $ACCELERATE_CMD launch \
     trainer.args.gradient_checkpointing=true \
     ++trainer.args.bf16=true \
     ++trainer.args.save_strategy=steps \
-    ++trainer.args.save_steps=250
+    ++trainer.args.save_steps=${STEPS_PER_EPOCH}
 
 echo ""
 echo "=============================================="
@@ -63,7 +63,7 @@ echo "Training logs saved to: ${TRAINING_LOG_DIR}"
 echo ""
 echo "Checkpoints available:"
 for step in "${CHECKPOINTS[@]}"; do
-    epoch=$((step / 250))
+    epoch=$((step / STEPS_PER_EPOCH))
     if [ -d "${FINETUNE_DIR}/checkpoint-${step}" ]; then
         echo "  - Epoch ${epoch}: ${FINETUNE_DIR}/checkpoint-${step}"
     fi

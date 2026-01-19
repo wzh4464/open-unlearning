@@ -11,7 +11,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/config.sh"
 
 EPOCH=3
-STEP=750
+STEP=$((EPOCH * STEPS_PER_EPOCH))
 
 # GPU configuration
 if [ -n "$1" ]; then
