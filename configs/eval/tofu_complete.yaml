@@ -1,0 +1,56 @@
+# @package eval.tofu
+# Complete evaluation config with ALL metrics
+
+defaults:
+  - tofu_metrics:
+    # Forget quality metrics
+    - forget_Truth_Ratio
+    - forget_quality
+    - forget_Q_A_Prob
+    - forget_Q_A_ROUGE
+    - forget_Q_A_gibberish
+    # Paraphrase variants
+    - forget_Q_A_PARA_Prob
+    - forget_Q_A_PARA_ROUGE
+    # Perturbation variants
+    - forget_Q_A_PERT_Prob
+    - forget_Q_A_PERT_ROUGE
+    # Model utility
+    - model_utility
+    # Privacy metrics
+    - privleak
+    - extraction_strength
+    - exact_memorization
+    # MIA attacks
+    - mia_min_k_plus_plus
+    - mia_min_k
+    - mia_loss
+    - mia_zlib
+    - mia_gradnorm
+    # - mia_reference  # Requires reference model path
+    # Retain metrics
+    - retain_Q_A_Prob
+    - retain_Q_A_ROUGE
+    - retain_Truth_Ratio
+    - retain_Q_A_PARA_Prob
+    - retain_Q_A_PERT_Prob
+    # Real authors metrics
+    - ra_Q_A_Prob
+    - ra_Q_A_ROUGE
+    - ra_Truth_Ratio
+    - ra_Q_A_PERT_Prob
+    # World facts metrics
+    - wf_Q_A_Prob
+    - wf_Q_A_ROUGE
+    - wf_Truth_Ratio
+    - wf_Q_A_PERT_Prob
+
+handler: TOFUEvaluator
+output_dir: ${paths.output_dir}
+metrics: {}
+overwrite: false
+forget_split: forget10
+holdout_split: holdout10
+retain_logs_path: null
+question_key: "question"
+batch_size: 32
