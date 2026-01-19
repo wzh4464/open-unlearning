@@ -58,10 +58,19 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         max_step: Optional[int] = None,
         apply_immediately: bool = False,
         audit_dir: Optional[str] = None,
+        finetune_dataset_path: str = "locuslab/TOFU",
+        finetune_dataset_name: str = "full",
+        finetune_dataset_split: str = "train",
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+
+        # 保存原始finetune数据集参数 (用于批次重建)
+        self.finetune_dataset_path = finetune_dataset_path
+        self.finetune_dataset_name = finetune_dataset_name
+        self.finetune_dataset_split = finetune_dataset_split
+        self._finetune_dataset = None  # 延迟加载
 
         self.training_log_dir = Path(training_log_dir)
         self.K = K
@@ -207,20 +216,17 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             return
 
         # 初始化批次重建器(如果需要)
-        if (
-            self.batch_reconstructor is None
-            and hasattr(self, "train_dataset")
-            and hasattr(self, "data_collator")
-        ):
-            # 获取原始训练数据集(用于重建)
-            # 如果train_dataset是组合的forget+retain数据集,需要获取原始完整数据集
-            reconstruct_dataset = self.train_dataset
-            if hasattr(self.train_dataset, "full_dataset"):
-                reconstruct_dataset = self.train_dataset.full_dataset
+        if self.batch_reconstructor is None and hasattr(self, "data_collator"):
+            # 加载原始finetune数据集 (不是unlearn的ForgetRetainDataset)
+            # 因为sample_indices是在finetune时记录的,引用的是原始数据集的索引
+            if self._finetune_dataset is None:
+                logger.info(f"Loading original finetune dataset: {self.finetune_dataset_path}/{self.finetune_dataset_name}")
+                self._finetune_dataset = self._load_finetune_dataset()
+                logger.info(f"Loaded finetune dataset with {len(self._finetune_dataset)} samples")
 
             self.batch_reconstructor = BatchReconstructor(
                 training_logger=self.training_logger,
-                dataset=reconstruct_dataset,
+                dataset=self._finetune_dataset,
                 data_collator=self.data_collator,
             )
             logger.info("Initialized BatchReconstructor for batch data reconstruction")
@@ -248,7 +254,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         logger.info(f"Applying unlearning for {len(forget_steps)} batches")
         logger.info(f"Target step (tau): {tau}, K: {self.K}")
 
-        # 对每个forget步骤计算并应用校正(使用懒加载)
+        # 对每个forget步骤计算并应用校正(内存优化版本)
         for i, tz in enumerate(forget_steps):
             logger.info(f"Processing forget step {i + 1}/{len(forget_steps)}: tz={tz}")
 
@@ -256,65 +262,121 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                 # 计算需要加载的步骤范围
                 start_step = tz
                 end_step = min(tz + self.K, tau - 1)
-                needed_steps = list(range(start_step, end_step + 1))
+                propagation_steps = list(range(start_step + 1, end_step + 1))
+                logger.debug(f"  Propagation range: {start_step+1} to {end_step}, {len(propagation_steps)} steps")
 
-                # 按需加载这些步骤的记录 (包含 tensor 数据)
-                logger.debug(f"Loading steps {start_step} to {end_step} for tz={tz}")
-                records = self.lazy_loader.load_steps(needed_steps, include_tensors=True)
-
-                if not records:
-                    logger.warning(f"No records found for step {tz}, skipping")
+                # 只加载 tz 步骤的 u vector (用于初始化 v)
+                logger.debug(f"  Loading u vector for step {tz}...")
+                import time
+                t0 = time.time()
+                tz_records = self.lazy_loader.load_steps([tz], include_tensors=True)
+                logger.debug(f"  Loaded u vector in {time.time() - t0:.2f}s")
+                if not tz_records:
+                    logger.warning(f"No record found for step {tz}, skipping")
                     continue
 
-                # 创建临时的 StepLog 用于 compute_correction
-                from .lmcleaner_core import StepLog
-                temp_step_log = StepLog(max_size=len(records) + 10)
+                tz_rec = tz_records[0]
+                u_tz = tz_rec.get("u")
+                if u_tz is None:
+                    logger.warning(f"No u vector for step {tz}, skipping")
+                    continue
 
-                for rec_dict in records:
-                    # 转换 dict 为 StepRecord
-                    step_record = StepRecord(
-                        step_id=rec_dict["step_id"],
-                        eta=rec_dict["eta"],
-                        batch_id=rec_dict["batch_id"],
-                        u=rec_dict.get("u"),
-                        gbar=rec_dict.get("gbar"),
-                        diag_H=rec_dict.get("diag_H"),
-                    )
-                    temp_step_log.add(step_record)
+                # 初始化 v = -u[tz]
+                logger.debug(f"  Initializing v (u shape: {u_tz.shape}, dtype: {u_tz.dtype})")
+                v = -u_tz.clone().to(self.hvp_config.device)
+                logger.debug(f"  v initialized on {self.hvp_config.device}")
+                del u_tz, tz_records
+                gc.collect()
 
-                # 计算参数校正向量
-                v, audit = compute_correction(
-                    tz=tz,
-                    tau=tau,
-                    K=self.K,
-                    step_log=temp_step_log,
-                    cfg=self.hvp_config,
-                    model=self.model,
-                    loss_fn=None,  # 使用默认损失
-                    batch_reconstructor=self.batch_reconstructor,
-                )
+                # 获取传播步骤的 eta 值 (使用缓存,避免加载完整 chunk)
+                logger.debug(f"  Getting eta values for {len(propagation_steps)} steps...")
+                t0 = time.time()
+                step_etas = self.lazy_loader.get_etas_for_steps(propagation_steps)
+                logger.debug(f"  Got {len(step_etas)} eta values in {time.time() - t0:.2f}s")
+
+                hvp_calls = 0
+                K_used = 0
+
+                # 前向传播: v[s+1] = v[s] - eta[s] * H[s] @ v[s]
+                logger.debug(f"  Starting forward propagation...")
+                for s_idx, s in enumerate(propagation_steps):
+                    if s_idx % 50 == 0:
+                        logger.debug(f"    HVP progress: {s_idx}/{len(propagation_steps)}")
+
+                    eta_s = step_etas.get(s)
+                    if eta_s is None:
+                        logger.debug(f"Step {s} eta not found, skipping")
+                        continue
+
+                    # 重建批次数据用于 HVP 计算
+                    if self.batch_reconstructor is not None:
+                        batch_data = self.batch_reconstructor.get_batch_for_step(s)
+                        if batch_data is None:
+                            logger.debug(f"Cannot reconstruct batch for step {s}, skipping")
+                            continue
+
+                        # 移动数据到正确设备
+                        batch_data = {
+                            k: val.to(self.hvp_config.device) if isinstance(val, torch.Tensor) else val
+                            for k, val in batch_data.items()
+                        }
+
+                        # 计算 HVP: H[s] @ v
+                        from .lmcleaner_core import hvp_ggn, hvp_diagonal
+                        with torch.enable_grad():
+                            if self.hessian_mode == "GGN":
+                                hvp = hvp_ggn(self.model, batch_data, v)
+                            else:
+                                hvp = hvp_diagonal(self.model, batch_data, v, None)
+
+                        # 更新 v: v ← v - eta[s] * hvp
+                        v = v - eta_s * hvp
+
+                        # 阻尼: v ← v - eta[s] * lambda * v
+                        if self.damping > 0:
+                            v = v - eta_s * self.damping * v
+
+                        hvp_calls += 1
+                        K_used += 1
+
+                        # 清理批次数据
+                        del batch_data, hvp
+                    else:
+                        logger.warning(f"No batch_reconstructor, cannot compute HVP for step {s}")
 
                 # 应用校正
                 apply_correction(v, params)
 
-                # 记录审计信息
+                # 计算 v_norm
+                v_norm = v.norm().item()
+
+                # 创建审计记录
+                audit = {
+                    "tz": tz,
+                    "tau": tau,
+                    "K_used": K_used,
+                    "v_norm": v_norm,
+                    "hvp_calls": hvp_calls,
+                    "mode": self.hessian_mode,
+                    "damping": self.damping,
+                }
                 self.audit_records.append(audit)
 
                 logger.info(
                     f"Applied correction for step {tz}: "
-                    f"v_norm={audit['v_norm']:.6f}, "
-                    f"K_used={audit['K_used']}, "
-                    f"hvp_calls={audit['hvp_calls']}"
+                    f"v_norm={v_norm:.6f}, K_used={K_used}, hvp_calls={hvp_calls}"
                 )
 
-                # 清理内存: 释放加载的记录和临时 StepLog
-                del records, temp_step_log, v
+                # 清理内存
+                del v, step_etas
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
             except Exception as e:
                 logger.error(f"Failed to apply correction for step {tz}: {e}")
+                import traceback
+                traceback.print_exc()
                 continue
 
         # 保存审计日志
@@ -362,6 +424,67 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             loss = torch.tensor(0.0, device=next(model.parameters()).device)
 
         return (loss, None) if return_outputs else loss
+
+    def _load_finetune_dataset(self):
+        """
+        加载原始 finetune 数据集用于批次重建
+
+        Returns:
+            可索引的数据集对象
+        """
+        from datasets import load_dataset
+        from data.utils import preprocess_chat_instance
+
+        # 加载 HuggingFace 数据集
+        hf_dataset = load_dataset(
+            self.finetune_dataset_path,
+            name=self.finetune_dataset_name,
+            split=self.finetune_dataset_split,
+        )
+
+        # 获取 tokenizer 和模板参数
+        tokenizer = self.tokenizer
+        # 从 config 中获取 template_args (如果有的话)
+        template_args = getattr(self, "template_args", {
+            "sys_prompt": None,
+            "incontext_prompt": None,
+            "incontext_response": None,
+        })
+
+        # 创建简单的数据集包装器
+        class SimpleQADataset:
+            def __init__(self, data, tokenizer, template_args, max_length=512):
+                self.data = data
+                self.tokenizer = tokenizer
+                self.template_args = template_args
+                self.max_length = max_length
+
+            def __len__(self):
+                return len(self.data)
+
+            def __getitem__(self, idx):
+                item = self.data[idx]
+                question = item["question"]
+                answer = item["answer"]
+
+                # 使用 preprocess_chat_instance 进行 tokenization
+                tokenized = preprocess_chat_instance(
+                    self.tokenizer,
+                    self.template_args,
+                    [question],
+                    [answer],
+                    self.max_length,
+                    predict_with_generate=False,
+                )
+
+                return {
+                    "input_ids": tokenized["input_ids"],
+                    "labels": tokenized["labels"],
+                    "attention_mask": tokenized["attention_mask"],
+                    "index": idx,
+                }
+
+        return SimpleQADataset(hf_dataset, tokenizer, template_args)
 
     def train(self, resume_from_checkpoint=None):
         """
