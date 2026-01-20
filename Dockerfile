@@ -4,12 +4,28 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # System dependencies + ensure conda is in PATH for all shells
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget unzip git tmux curl openssh-client openssh-server && \
+    wget unzip git tmux curl openssh-client openssh-server \
+    nvtop htop && \
     echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/profile.d/conda.sh && \
     echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/bash.bashrc && \
     ln -sf /opt/conda/bin/python /usr/bin/python && \
     ln -sf /opt/conda/bin/python /usr/bin/python3 && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Install Node.js v20.x
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y nodejs && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Install global npm packages (gemini CLI)
+RUN npm install -g @google/gemini-cli
+
+# Install Python dev tools
+RUN pip install --no-cache-dir ruff pytest uv
+
+# Install Claude Code CLI
+RUN curl -fsSL https://claude.ai/install.sh | sh && \
+    echo 'export PATH=$PATH:/root/.local/bin' >> /etc/bash.bashrc
 
 WORKDIR /app
 
@@ -38,7 +54,16 @@ RUN pip install flash-attn==2.8.3 --no-build-isolation
 # Copy code
 COPY . .
 
+# Environment variables
 ENV IN_DOCKER=1
+ENV PATH="/root/.local/bin:${PATH}"
+
+# Git config
+RUN git config --global user.name "runpod_zihan" && \
+    git config --global user.email "32484940+wzh4464@users.noreply.github.com"
+
+# Setup dotfiles (tmux config) - will be done at runtime if /workspace/dotfiles exists
+RUN echo '[ -d /workspace/dotfiles ] && ln -sf /workspace/dotfiles/tmux/tmux.conf ~/.tmux.conf' >> /etc/bash.bashrc
 
 # Entrypoint
 COPY scripts/docker-entrypoint.sh /entrypoint.sh
