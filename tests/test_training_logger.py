@@ -368,10 +368,9 @@ class TestSaveLoad:
         logger2 = TrainingLogger(log_dir=str(temp_log_dir))
         logger2.load_from_disk(load_tensors=True)
 
-        # After save_to_disk(), indices are cleared (memory-efficient behavior)
-        # When loading with load_tensors=True, we reload them
-        # The final save includes all remaining indices (steps 1-4 after step 0 auto-save)
-        assert len(logger2.sample_indices_per_step) == 4
+        # save_to_disk() uses incremental append mode - all indices are accumulated
+        # When loading with load_tensors=True, we get all saved indices
+        assert len(logger2.sample_indices_per_step) == 5  # All 5 steps' indices
 
 
 # ============================================================================
@@ -491,10 +490,9 @@ class TestIntegration:
         # Verify loaded data
         assert len(logger2.step_log.buffer) == 10
 
-        # With save_interval=5, automatic saves happen at steps 0 and 5
-        # After final save_to_disk(), indices from steps 6-9 remain (4 indices)
-        # because they were added after the last automatic save at step 5
-        assert len(logger2.sample_indices_per_step) == 4
+        # save_to_disk() uses incremental append mode - all indices are accumulated
+        # across multiple saves, so we get all 10 steps' indices
+        assert len(logger2.sample_indices_per_step) == 10
 
         # Verify specific step
         record = logger2.step_log.get(5)
