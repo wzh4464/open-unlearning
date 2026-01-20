@@ -1,17 +1,27 @@
 """
 LMCleaner Batch-Level Implementation: 批次级在线遗忘
 
-算法特点:
-- 初始偏差: δ[tz+1] = -η_tz * gbar[tz] (或直接使用记录的u[tz])
-- 存储复杂度: O((N/B) * p) vs 样本级的 O(N * p)
-- 前向K步传播: v[s+1] = (I - η_s H[s]) v[s]
-- 参数校正: θ̂[τ] = θ[τ] + v
+论文: LMCleaner: Efficient and Certified Online Unlearning via Truncated Influence Propagation
+
+算法特点 (论文 Algorithm 1):
+- Phase 1: 初始偏差 v = θ[t_z+1] - θ[t_z] = -u[t_z]
+- Phase 2: 截断影响传播 v[s+1] = (I - η_s H[s]) v[s], s ∈ [t_z+1, min(t_z+K, τ-1)]
+- Phase 3: 影响移除 θ̂[τ] = θ[τ] - v (实现中: θ ← θ + v, 因为 v = -u)
+- Phase 4: 隐私保护 θ̃[τ] = θ̂[τ] + N(0, σ²I) 实现 (ε,δ)-certified unlearning
+
+存储复杂度: O((N/B) * p) vs 样本级的 O(N * p)
 
 用法:
 1. 预训练时使用TrainingLogger记录训练轨迹
 2. 加载预训练模型和训练日志
 3. 运行遗忘(自动应用参数校正)
 4. 评估遗忘效果
+
+实现说明:
+- hessian_mode="fisher": 论文 Algorithm 1 使用的方法 Hv = g·(g^T v)
+- hessian_mode="GGN": 使用二阶自动微分，更精确但计算量更大
+- epsilon > 0: 启用 Phase 4 隐私噪声注入
+- damping=0: 与论文一致 (damping>0 是额外的数值稳定化)
 """
 
 import gc
@@ -27,8 +37,11 @@ from .lmcleaner_core import (
     HVPConfig,
     AuditRecord,
     StepRecord,
+    StepLog,
     compute_correction,
     apply_correction,
+    compute_noise_sigma,
+    inject_privacy_noise,
 )
 from ..training_logger import TrainingLogger, BatchReconstructor, LazyRecordLoader
 
@@ -39,28 +52,43 @@ class LMCleanerBatchLevel(UnlearnTrainer):
     """
     批次级LMCleaner在线遗忘
 
+    实现论文 Algorithm 1 的完整四阶段算法:
+    - Phase 1: 初始偏差计算
+    - Phase 2: 截断影响传播 (K步)
+    - Phase 3: 影响移除
+    - Phase 4: 隐私噪声注入 (可选, 实现 certified unlearning)
+
     Args:
         training_log_dir: 训练日志目录(TrainingLogger输出)
-        K: 截断窗口大小
-        hessian_mode: HVP模式 ("GGN", "diag", "exact", "low_rank")
-        damping: 阻尼系数λ
+        K: 截断窗口大小 (论文建议 K=64-1000)
+        hessian_mode: HVP模式
+            - "fisher": 论文 Algorithm 1 使用的 Fisher 近似 Hv = g·(g^T v)
+            - "GGN": 广义 Gauss-Newton 近似 (更精确但计算量更大)
+            - "diag": 对角 Hessian 近似
+            - "exact": 精确 HVP (非常慢)
+        damping: 阻尼系数λ (论文未包含，默认0以与论文一致)
         max_step: 最大步数(用于epoch-based评估,只考虑<=max_step的步骤)
         apply_immediately: 是否在初始化时立即应用遗忘(否则在train()时)
         audit_dir: 审计日志输出目录
+        epsilon: 隐私参数 ε (>0 时启用 Phase 4 噪声注入)
+        delta: 隐私参数 δ (默认 1e-5)
     """
 
     def __init__(
         self,
         training_log_dir: str,
         K: int = 800,
-        hessian_mode: str = "GGN",
-        damping: float = 1e-4,
+        hessian_mode: str = "fisher",  # 默认使用论文的 Fisher 近似
+        damping: float = 0.0,  # 默认不添加阻尼，与论文一致
         max_step: Optional[int] = None,
         apply_immediately: bool = False,
         audit_dir: Optional[str] = None,
         finetune_dataset_path: str = "locuslab/TOFU",
         finetune_dataset_name: str = "full",
         finetune_dataset_split: str = "train",
+        # Phase 4: 隐私噪声参数
+        epsilon: float = 0.0,  # 默认不注入噪声
+        delta: float = 1e-5,
         *args,
         **kwargs,
     ):
@@ -78,6 +106,10 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         self.damping = damping
         self.max_step = max_step
         self.apply_immediately = apply_immediately
+
+        # Phase 4: 隐私参数
+        self.epsilon = epsilon
+        self.delta = delta
 
         # HVP配置
         self.hvp_config = HVPConfig(
@@ -112,7 +144,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
 
         logger.info(
             f"LMCleanerBatchLevel initialized: K={K}, hessian_mode={hessian_mode}, "
-            f"damping={damping}"
+            f"damping={damping}, epsilon={epsilon}, delta={delta}"
         )
 
         # 立即应用遗忘(如果设置)
@@ -217,8 +249,6 @@ class LMCleanerBatchLevel(UnlearnTrainer):
 
         # 初始化批次重建器(如果需要)
         if self.batch_reconstructor is None and hasattr(self, "data_collator"):
-            # 加载原始finetune数据集 (不是unlearn的ForgetRetainDataset)
-            # 因为sample_indices是在finetune时记录的,引用的是原始数据集的索引
             if self._finetune_dataset is None:
                 logger.info(f"Loading original finetune dataset: {self.finetune_dataset_path}/{self.finetune_dataset_name}")
                 self._finetune_dataset = self._load_finetune_dataset()
@@ -234,7 +264,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # 当前步骤(训练结束时的步骤，或用户指定的max_step)
         tau = self.max_step if self.max_step is not None else self.training_logger.current_step
 
-        # 过滤forget steps，只保留 <= tau 的步骤
+        # 过滤forget steps
         original_count = len(forget_steps)
         forget_steps = [s for s in forget_steps if s <= tau]
         if len(forget_steps) < original_count:
@@ -248,13 +278,11 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             self.unlearning_applied = True
             return
 
-        # 获取模型参数列表
         params = [p for p in self.model.parameters() if p.requires_grad]
 
         logger.info(f"Applying unlearning for {len(forget_steps)} batches")
         logger.info(f"Target step (tau): {tau}, K: {self.K}")
 
-        # 对每个forget步骤计算并应用校正(内存优化版本)
         for i, tz in enumerate(forget_steps):
             logger.info(f"Processing forget step {i + 1}/{len(forget_steps)}: tz={tz}")
 
@@ -262,113 +290,54 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                 # 计算需要加载的步骤范围
                 start_step = tz
                 end_step = min(tz + self.K, tau - 1)
-                propagation_steps = list(range(start_step + 1, end_step + 1))
-                logger.debug(f"  Propagation range: {start_step+1} to {end_step}, {len(propagation_steps)} steps")
+                needed_steps = list(range(start_step, end_step + 1))
 
-                # 只加载 tz 步骤的 u vector (用于初始化 v)
-                logger.debug(f"  Loading u vector for step {tz}...")
-                import time
-                t0 = time.time()
-                tz_records = self.lazy_loader.load_steps([tz], include_tensors=True)
-                logger.debug(f"  Loaded u vector in {time.time() - t0:.2f}s")
-                if not tz_records:
-                    logger.warning(f"No record found for step {tz}, skipping")
+                # 按需加载这些步骤的记录
+                records = self.lazy_loader.load_steps(needed_steps, include_tensors=True)
+
+                if not records:
+                    logger.warning(f"No records found for step {tz}, skipping")
                     continue
+                
+                # 创建临时的 StepLog
+                temp_step_log = StepLog(max_size=len(records) + 10)
+                for rec_dict in records:
+                    step_record = StepRecord(
+                        step_id=rec_dict["step_id"],
+                        eta=rec_dict["eta"],
+                        batch_id=rec_dict["batch_id"],
+                        u=rec_dict.get("u"),
+                        gbar=rec_dict.get("gbar"),
+                        diag_H=rec_dict.get("diag_H"),
+                        batch_data=rec_dict.get("batch_data"),
+                    )
+                    temp_step_log.add(step_record)
+                
+                # 调用核心计算函数
+                v, audit = compute_correction(
+                    tz=tz,
+                    tau=tau,
+                    K=self.K,
+                    step_log=temp_step_log,
+                    cfg=self.hvp_config,
+                    model=self.model,
+                    batch_reconstructor=self.batch_reconstructor,
+                    epsilon=self.epsilon,
+                    delta=self.delta
+                )
 
-                tz_rec = tz_records[0]
-                u_tz = tz_rec.get("u")
-                if u_tz is None:
-                    logger.warning(f"No u vector for step {tz}, skipping")
-                    continue
-
-                # 初始化 v = -u[tz]
-                logger.debug(f"  Initializing v (u shape: {u_tz.shape}, dtype: {u_tz.dtype})")
-                v = -u_tz.clone().to(self.hvp_config.device)
-                logger.debug(f"  v initialized on {self.hvp_config.device}")
-                del u_tz, tz_records
-                gc.collect()
-
-                # 获取传播步骤的 eta 值 (使用缓存,避免加载完整 chunk)
-                logger.debug(f"  Getting eta values for {len(propagation_steps)} steps...")
-                t0 = time.time()
-                step_etas = self.lazy_loader.get_etas_for_steps(propagation_steps)
-                logger.debug(f"  Got {len(step_etas)} eta values in {time.time() - t0:.2f}s")
-
-                hvp_calls = 0
-                K_used = 0
-
-                # 前向传播: v[s+1] = v[s] - eta[s] * H[s] @ v[s]
-                logger.debug(f"  Starting forward propagation...")
-                for s_idx, s in enumerate(propagation_steps):
-                    if s_idx % 50 == 0:
-                        logger.debug(f"    HVP progress: {s_idx}/{len(propagation_steps)}")
-
-                    eta_s = step_etas.get(s)
-                    if eta_s is None:
-                        logger.debug(f"Step {s} eta not found, skipping")
-                        continue
-
-                    # 重建批次数据用于 HVP 计算
-                    if self.batch_reconstructor is not None:
-                        batch_data = self.batch_reconstructor.get_batch_for_step(s)
-                        if batch_data is None:
-                            logger.debug(f"Cannot reconstruct batch for step {s}, skipping")
-                            continue
-
-                        # 移动数据到正确设备
-                        batch_data = {
-                            k: val.to(self.hvp_config.device) if isinstance(val, torch.Tensor) else val
-                            for k, val in batch_data.items()
-                        }
-
-                        # 计算 HVP: H[s] @ v
-                        from .lmcleaner_core import hvp_ggn, hvp_diagonal
-                        with torch.enable_grad():
-                            if self.hessian_mode == "GGN":
-                                hvp = hvp_ggn(self.model, batch_data, v)
-                            else:
-                                hvp = hvp_diagonal(self.model, batch_data, v, None)
-
-                        # 更新 v: v ← v - eta[s] * hvp
-                        v = v - eta_s * hvp
-
-                        # 阻尼: v ← v - eta[s] * lambda * v
-                        if self.damping > 0:
-                            v = v - eta_s * self.damping * v
-
-                        hvp_calls += 1
-                        K_used += 1
-
-                        # 清理批次数据
-                        del batch_data, hvp
-                    else:
-                        logger.warning(f"No batch_reconstructor, cannot compute HVP for step {s}")
-
-                # 应用校正
+                # Phase 3: 应用校正
                 apply_correction(v, params)
-
-                # 计算 v_norm
-                v_norm = v.norm().item()
-
-                # 创建审计记录
-                audit = {
-                    "tz": tz,
-                    "tau": tau,
-                    "K_used": K_used,
-                    "v_norm": v_norm,
-                    "hvp_calls": hvp_calls,
-                    "mode": self.hessian_mode,
-                    "damping": self.damping,
-                }
                 self.audit_records.append(audit)
 
                 logger.info(
                     f"Applied correction for step {tz}: "
-                    f"v_norm={v_norm:.6f}, K_used={K_used}, hvp_calls={hvp_calls}"
+                    f"v_norm={audit.v_norm:.6f}, K_used={audit.K_used}, hvp_calls={audit.hvp_calls}"
+                    + (f", noise_σ={audit.noise_sigma:.6f}" if audit.noise_injected else "")
                 )
 
                 # 清理内存
-                del v, step_etas
+                del records, temp_step_log, v
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
@@ -379,7 +348,6 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                 traceback.print_exc()
                 continue
 
-        # 保存审计日志
         if self.audit_dir:
             self._save_audit_records()
 

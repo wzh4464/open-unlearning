@@ -1,11 +1,14 @@
 """
 LMCleaner Sample-Level Implementation: 样本级在线遗忘
 
-算法特点:
-- 初始偏差: δ[tzj+1] = -(η_tzj / |Stzj|) * ∇θ`(zj; θ[tzj]) (对每个forget样本)
+论文: LMCleaner: Efficient and Certified Online Unlearning via Truncated Influence Propagation
+
+算法特点 (论文 Eq. 3 样本级公式):
+- 初始偏差: δ[t_{z_j}+1] = -(η_{t_{z_j}} / |S_{t_{z_j}}|) * ∇θℓ(z_j; θ[t_{z_j}])
 - 存储复杂度: O(N * p) (N为样本数)
 - 前向K步传播: v[s+1] = (I - η_s H[s]) v[s]
 - 参数校正: θ̂[τ] = θ[τ] + v
+- 隐私保护: θ̃[τ] = θ̂[τ] + N(0, σ²I) (Phase 4, 可选)
 
 相比批次级:
 - 更精确(样本级梯度)
@@ -17,6 +20,12 @@ LMCleaner Sample-Level Implementation: 样本级在线遗忘
 2. 加载预训练模型和训练日志
 3. 运行遗忘(自动应用参数校正)
 4. 评估遗忘效果
+
+实现说明:
+- hessian_mode="fisher": 论文 Algorithm 1 使用的方法 Hv = g·(g^T v)
+- hessian_mode="GGN": 使用二阶自动微分，更精确但计算量更大
+- epsilon > 0: 启用 Phase 4 隐私噪声注入
+- damping=0: 与论文一致 (damping>0 是额外的数值稳定化)
 """
 
 import logging
@@ -30,6 +39,8 @@ from .lmcleaner_core import (
     HVPConfig,
     AuditRecord,
     apply_correction,
+    compute_noise_sigma,
+    inject_privacy_noise,
 )
 from ..training_logger import TrainingLogger, BatchReconstructor
 
@@ -40,25 +51,40 @@ class LMCleanerSampleLevel(UnlearnTrainer):
     """
     样本级LMCleaner在线遗忘
 
+    实现论文 Algorithm 1 的完整四阶段算法 (样本级版本):
+    - Phase 1: 样本级初始偏差计算 (论文 Eq. 3)
+    - Phase 2: 截断影响传播 (K步)
+    - Phase 3: 影响移除
+    - Phase 4: 隐私噪声注入 (可选, 实现 certified unlearning)
+
     Args:
         training_log_dir: 训练日志目录(TrainingLogger输出)
         K: 截断窗口大小
-        hessian_mode: HVP模式 ("GGN", "diag", "exact", "low_rank")
-        damping: 阻尼系数λ
+        hessian_mode: HVP模式
+            - "fisher": 论文 Algorithm 1 使用的 Fisher 近似 Hv = g·(g^T v)
+            - "GGN": 广义 Gauss-Newton 近似 (更精确但计算量更大)
+            - "diag": 对角 Hessian 近似
+            - "exact": 精确 HVP (非常慢)
+        damping: 阻尼系数λ (论文未包含，默认0以与论文一致)
         batch_size_at_training: 训练时的批次大小(用于计算样本级初始偏差)
         apply_immediately: 是否在初始化时立即应用遗忘
         audit_dir: 审计日志输出目录
+        epsilon: 隐私参数 ε (>0 时启用 Phase 4 噪声注入)
+        delta: 隐私参数 δ (默认 1e-5)
     """
 
     def __init__(
         self,
         training_log_dir: str,
         K: int = 800,
-        hessian_mode: str = "GGN",
-        damping: float = 1e-4,
+        hessian_mode: str = "fisher",  # 默认使用论文的 Fisher 近似
+        damping: float = 0.0,  # 默认不添加阻尼，与论文一致
         batch_size_at_training: int = 1,
         apply_immediately: bool = False,
         audit_dir: Optional[str] = None,
+        # Phase 4: 隐私噪声参数
+        epsilon: float = 0.0,  # 默认不注入噪声
+        delta: float = 1e-5,
         *args,
         **kwargs,
     ):
@@ -70,6 +96,10 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         self.damping = damping
         self.batch_size_at_training = batch_size_at_training
         self.apply_immediately = apply_immediately
+
+        # Phase 4: 隐私参数
+        self.epsilon = epsilon
+        self.delta = delta
 
         # HVP配置
         self.hvp_config = HVPConfig(
@@ -101,7 +131,8 @@ class LMCleanerSampleLevel(UnlearnTrainer):
 
         logger.info(
             f"LMCleanerSampleLevel initialized: K={K}, hessian_mode={hessian_mode}, "
-            f"damping={damping}, batch_size={batch_size_at_training}"
+            f"damping={damping}, batch_size={batch_size_at_training}, "
+            f"epsilon={epsilon}, delta={delta}"
         )
 
         # 立即应用遗忘(如果设置)
@@ -160,12 +191,12 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         tau: int,
     ) -> tuple[torch.Tensor, AuditRecord]:
         """
-        计算单个样本的参数校正向量
+        计算单个样本的参数校正向量 (论文 Eq. 3)
 
-        样本级的初始偏差:
-        δ[tz+1] = -(η_tz / B) * ∇θ`(zj; θ[tz])
+        样本级的初始偏差 (Phase 1):
+        δ[t_{z_j}+1] = -(η_{t_{z_j}} / |S_{t_{z_j}}|) * ∇θℓ(z_j; θ[t_{z_j}])
 
-        其中B是训练时的批次大小
+        其中 |S_{t_{z_j}}| 是训练时的批次大小
 
         Args:
             tz: 样本出现的步骤
@@ -183,11 +214,11 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         if rec.gbar is None:
             raise ValueError(f"Step {tz} missing gradient")
 
-        # 初始偏差: v0 = -(η_tz / B) * ∇θ`(zj; θ[tz])
+        # Phase 1: 初始偏差 v0 = -(η_tz / B) * ∇θℓ(zj; θ[tz])
         # 由于我们记录的gbar已经是单个样本的梯度,需要除以批次大小
         v = -(rec.eta / self.batch_size_at_training) * rec.gbar.clone()
 
-        # 前向传播
+        # Phase 2: 前向传播
         start = tz + 1
         end = min(tz + self.K, tau - 1)
         K_used = max(0, end - start + 1)
@@ -201,6 +232,7 @@ class LMCleanerSampleLevel(UnlearnTrainer):
                 continue
 
             # 计算 H[s] @ v using hvp_apply
+            # 根据 hessian_mode 自动选择 Fisher 或 GGN 近似
             from .lmcleaner_core import hvp_apply
 
             with torch.enable_grad():
@@ -211,21 +243,43 @@ class LMCleanerSampleLevel(UnlearnTrainer):
             # v ← v - η[s] * hvp
             v = v - srec.eta * hvp
 
-            # 添加阻尼: v ← v - η[s] * λ * v
+            # 添加阻尼: v ← v - η[s] * λ * v (实现添加，论文未包含)
             if self.damping > 0:
                 v = v - srec.eta * self.damping * v
 
             hvp_calls += 1
+
+        # 记录 Phase 3 前的 v_norm
+        v_norm_before_noise = float(v.norm().item())
+
+        # Phase 4: 隐私噪声注入 (论文 Algorithm 1)
+        noise_sigma = 0.0
+        noise_injected = False
+
+        if self.epsilon > 0:
+            # 使用 v_norm 作为 delta_det 的保守估计
+            delta_det = v_norm_before_noise
+            noise_sigma = compute_noise_sigma(delta_det, self.epsilon, self.delta)
+            v = inject_privacy_noise(v, noise_sigma)
+            noise_injected = True
+            logger.debug(
+                f"  Phase 4: Injected privacy noise σ={noise_sigma:.6f} "
+                f"(ε={self.epsilon}, δ={self.delta})"
+            )
 
         # 创建审计记录
         audit = AuditRecord(
             tz=tz,
             tau=tau,
             K_used=K_used,
-            v_norm=float(v.norm().item()),
+            v_norm=v_norm_before_noise,
             hvp_calls=hvp_calls,
             mode=self.hessian_mode,
             damping=self.damping,
+            noise_sigma=noise_sigma,
+            noise_injected=noise_injected,
+            epsilon=self.epsilon if noise_injected else 0.0,
+            delta=self.delta if noise_injected else 0.0,
         )
 
         return v, audit

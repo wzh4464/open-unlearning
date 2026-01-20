@@ -17,11 +17,14 @@ from trainer.unlearn.lmcleaner_core import (
     StepRecord,
     StepLog,
     HVPConfig,
+    hvp_fisher,
     hvp_ggn,
     hvp_diagonal,
     hvp_apply,
     compute_correction,
     apply_correction,
+    compute_noise_sigma,
+    inject_privacy_noise,
     _flatten,
     _unflatten_like,
     compute_param_update_vector,
@@ -37,8 +40,14 @@ from trainer.unlearn.lmcleaner_core import (
 
 @pytest.fixture
 def hvp_config():
-    """Create default HVP config"""
+    """Create default HVP config for tests (using GGN for backward compatibility)"""
     return HVPConfig(mode="GGN", damping=1e-4, device="cpu")
+
+
+@pytest.fixture
+def hvp_config_fisher():
+    """Create Fisher HVP config (paper Algorithm 1)"""
+    return HVPConfig(mode="fisher", damping=0.0, device="cpu")
 
 
 # ============================================================================
@@ -73,6 +82,28 @@ class TestAuditRecord:
         assert record.hvp_calls == 0
         assert record.mode == "GGN"
         assert record.damping == 0.0
+        # New Phase 4 fields
+        assert record.noise_sigma == 0.0
+        assert record.noise_injected is False
+        assert record.epsilon == 0.0
+        assert record.delta == 0.0
+
+    def test_privacy_fields(self):
+        """Test privacy-related fields for Phase 4"""
+        record = AuditRecord(
+            tz=10,
+            tau=20,
+            noise_sigma=0.5,
+            noise_injected=True,
+            epsilon=1.0,
+            delta=1e-5
+        )
+        assert record.noise_sigma == 0.5
+        assert record.noise_injected is True
+        assert record.epsilon == 1.0
+        assert record.delta == 1e-5
+        assert record['noise_sigma'] == 0.5
+        assert record['noise_injected'] is True
 
 
 class TestStepRecord:
@@ -199,10 +230,12 @@ class TestHVPConfig:
     """Test HVPConfig class"""
 
     def test_default_initialization(self):
-        """Test default values"""
+        """Test default values (paper-aligned defaults)"""
         cfg = HVPConfig()
-        assert cfg.mode == "GGN"
-        assert cfg.damping == 1e-4
+        # Default is now "fisher" to match paper Algorithm 1
+        assert cfg.mode == "fisher"
+        # Default damping is 0 to match paper (no damping)
+        assert cfg.damping == 0.0
         assert cfg.rank == 10
         assert cfg.device == "cuda"
         assert cfg.dtype == torch.float32
@@ -226,6 +259,17 @@ class TestHVPConfig:
         """Test hessian_mode attribute for compatibility"""
         cfg = HVPConfig(mode="diag")
         assert cfg.hessian_mode == "diag"
+
+    def test_fisher_mode(self):
+        """Test fisher mode initialization"""
+        cfg = HVPConfig(mode="fisher", damping=0.0)
+        assert cfg.mode == "fisher"
+        assert cfg.hessian_mode == "fisher"
+
+    def test_invalid_mode_raises_error(self):
+        """Test that invalid mode raises ValueError"""
+        with pytest.raises(ValueError, match="Unknown mode"):
+            HVPConfig(mode="invalid_mode")
 
 
 # ============================================================================
@@ -302,11 +346,146 @@ class TestUtilityFunctions:
 
 
 # ============================================================================
+# Test Privacy Noise (Paper Phase 4)
+# ============================================================================
+
+class TestPrivacyNoise:
+    """Test privacy noise injection functions for Phase 4"""
+
+    def test_compute_noise_sigma_basic(self):
+        """Test basic noise sigma computation (Theorem 2)"""
+        delta_det = 1.0
+        epsilon = 1.0
+        delta = 1e-5
+
+        sigma = compute_noise_sigma(delta_det, epsilon, delta)
+
+        # σ = (Δ_det / ε) * sqrt(2 * log(1.25 / δ))
+        import math
+        expected = (1.0 / 1.0) * math.sqrt(2 * math.log(1.25 / 1e-5))
+        assert abs(sigma - expected) < 1e-6
+
+    def test_compute_noise_sigma_scaling(self):
+        """Test that sigma scales correctly with parameters"""
+        # Larger delta_det -> larger sigma
+        sigma1 = compute_noise_sigma(1.0, 1.0, 1e-5)
+        sigma2 = compute_noise_sigma(2.0, 1.0, 1e-5)
+        assert sigma2 > sigma1
+
+        # Larger epsilon -> smaller sigma (more privacy budget)
+        sigma3 = compute_noise_sigma(1.0, 2.0, 1e-5)
+        assert sigma3 < sigma1
+
+    def test_compute_noise_sigma_invalid_epsilon(self):
+        """Test that invalid epsilon raises error"""
+        with pytest.raises(ValueError, match="epsilon must be > 0"):
+            compute_noise_sigma(1.0, 0.0, 1e-5)
+        with pytest.raises(ValueError, match="epsilon must be > 0"):
+            compute_noise_sigma(1.0, -1.0, 1e-5)
+
+    def test_compute_noise_sigma_invalid_delta(self):
+        """Test that invalid delta raises error"""
+        with pytest.raises(ValueError, match="delta must be in"):
+            compute_noise_sigma(1.0, 1.0, 0.0)
+        with pytest.raises(ValueError, match="delta must be in"):
+            compute_noise_sigma(1.0, 1.0, 1.0)
+        with pytest.raises(ValueError, match="delta must be in"):
+            compute_noise_sigma(1.0, 1.0, 1.5)
+
+    def test_compute_noise_sigma_invalid_delta_det(self):
+        """Test that negative delta_det raises error"""
+        with pytest.raises(ValueError, match="delta_det must be >= 0"):
+            compute_noise_sigma(-1.0, 1.0, 1e-5)
+
+    def test_compute_noise_sigma_zero_delta_det(self):
+        """Test that delta_det=0 returns sigma=0 (valid edge case)"""
+        sigma = compute_noise_sigma(0.0, 1.0, 1e-5)
+        assert sigma == 0.0
+
+    def test_inject_privacy_noise_basic(self):
+        """Test basic noise injection"""
+        v = torch.zeros(100)
+        sigma = 1.0
+
+        v_noisy = inject_privacy_noise(v, sigma)
+
+        # With zero input, output should be approximately N(0, σ²)
+        assert v_noisy.shape == v.shape
+        # Check that noise was actually added
+        assert not torch.allclose(v_noisy, v)
+
+    def test_inject_privacy_noise_zero_sigma(self):
+        """Test that zero sigma returns unchanged vector"""
+        v = torch.randn(100)
+        v_noisy = inject_privacy_noise(v, 0.0)
+
+        assert torch.allclose(v_noisy, v)
+
+    def test_inject_privacy_noise_reproducibility(self):
+        """Test reproducibility with generator"""
+        v = torch.zeros(100)
+        sigma = 1.0
+
+        gen1 = torch.Generator().manual_seed(42)
+        gen2 = torch.Generator().manual_seed(42)
+
+        v_noisy1 = inject_privacy_noise(v, sigma, generator=gen1)
+        v_noisy2 = inject_privacy_noise(v, sigma, generator=gen2)
+
+        assert torch.allclose(v_noisy1, v_noisy2)
+
+    def test_inject_privacy_noise_statistics(self):
+        """Test that noise has approximately correct statistics"""
+        v = torch.zeros(10000)
+        sigma = 2.0
+
+        v_noisy = inject_privacy_noise(v, sigma)
+
+        # Mean should be close to 0
+        assert abs(v_noisy.mean().item()) < 0.1
+        # Std should be close to sigma
+        assert abs(v_noisy.std().item() - sigma) < 0.2
+
+
+# ============================================================================
 # Test HVP Computation
 # ============================================================================
 
 class TestHVPComputation:
     """Test HVP computation functions"""
+
+    def test_hvp_fisher_basic(self, simple_model, batch_data):
+        """Test basic Fisher HVP computation (paper Algorithm 1)"""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+        v = torch.randn(param_count)
+
+        hvp = hvp_fisher(simple_model, batch_data, v, params)
+
+        assert hvp.shape == v.shape
+        assert not torch.isnan(hvp).any()
+        assert not torch.isinf(hvp).any()
+
+    def test_hvp_fisher_rank_one(self, simple_model, batch_data):
+        """Test that Fisher HVP is rank-1 (Hv = g * (g^T v))"""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+
+        # Use two different v vectors
+        v1 = torch.randn(param_count)
+        v2 = torch.randn(param_count)
+
+        hvp1 = hvp_fisher(simple_model, batch_data, v1, params)
+        hvp2 = hvp_fisher(simple_model, batch_data, v2, params)
+
+        # For rank-1 matrix, Hv1 and Hv2 should be parallel (same direction)
+        # Hv = g * (g^T v), so Hv1 / Hv2 = (g^T v1) / (g^T v2) for all elements
+        # This means the ratio should be constant (where hvp2 != 0)
+        mask = torch.abs(hvp2) > 1e-6
+        if mask.any():
+            ratios = hvp1[mask] / hvp2[mask]
+            # All ratios should be approximately equal
+            assert torch.std(ratios).item() < 0.1
 
     def test_hvp_ggn_basic(self, simple_model, batch_data):
         """Test basic GGN HVP computation"""
@@ -381,10 +560,30 @@ class TestHVPComputation:
 
         assert torch.allclose(hvp, v * 0.5)
 
-    def test_hvp_apply_missing_batch_data(self, simple_model, hvp_config):
+    def test_hvp_apply_fisher_mode(self, simple_model, batch_data):
+        """Test hvp_apply with fisher mode (paper Algorithm 1)"""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+        v = torch.randn(param_count)
+
+        cfg = HVPConfig(mode="fisher", device="cpu")
+        step_rec = StepRecord(
+            step_id=1,
+            eta=0.01,
+            batch_id="b1",
+            batch_data=batch_data
+        )
+
+        hvp = hvp_apply(v, step_rec, cfg, simple_model)
+
+        assert hvp.shape == v.shape
+        assert not torch.isnan(hvp).any()
+
+    def test_hvp_apply_missing_batch_data(self, simple_model):
         """Test hvp_apply with missing batch data"""
         param_count = sum(p.numel() for p in simple_model.parameters() if p.requires_grad)
         v = torch.randn(param_count)
+        hvp_config = HVPConfig(mode="GGN", device="cpu")
 
         step_rec = StepRecord(
             step_id=1,
@@ -395,6 +594,79 @@ class TestHVPComputation:
 
         with pytest.raises(ValueError, match="No batch data found"):
             hvp_apply(v, step_rec, hvp_config, simple_model)
+
+    def test_hvp_fisher_matches_manual_formula(self, simple_model, batch_data):
+        """Test that hvp_fisher computes Hv = g * (g^T v) exactly"""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+        v = torch.randn(param_count)
+
+        # Get HVP from function
+        hvp = hvp_fisher(simple_model, batch_data, v, params)
+
+        # Manually compute g and verify Hv = g * (g^T v)
+        simple_model.zero_grad()
+        outputs = simple_model(**batch_data)
+        loss = outputs.loss if hasattr(outputs, "loss") and outputs.loss is not None else \
+            torch.nn.functional.cross_entropy(
+                outputs.logits.view(-1, outputs.logits.size(-1)),
+                batch_data["labels"].view(-1)
+            )
+        grads = torch.autograd.grad(loss, params)
+        g = _flatten([grad.detach() for grad in grads])
+
+        # Expected: Hv = g * (g^T v)
+        expected_hvp = g * torch.dot(g, v)
+
+        assert torch.allclose(hvp, expected_hvp, atol=1e-5), \
+            f"HVP mismatch: max diff = {(hvp - expected_hvp).abs().max()}"
+
+    def test_hvp_fisher_rank_one_robust(self, simple_model, batch_data):
+        """Test rank-1 property with robustness check for zero gradients"""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+
+        v1 = torch.randn(param_count)
+        v2 = torch.randn(param_count)
+
+        hvp1 = hvp_fisher(simple_model, batch_data, v1, params)
+        hvp2 = hvp_fisher(simple_model, batch_data, v2, params)
+
+        # Verify both HVPs have some non-zero elements
+        assert hvp1.norm() > 1e-6 or hvp2.norm() > 1e-6, \
+            "Both HVPs are too small to verify rank-1 property"
+
+        # For rank-1 matrix, Hv1 and Hv2 should be parallel
+        mask = (torch.abs(hvp2) > 1e-6) & (torch.abs(hvp1) > 1e-6)
+        if mask.any():
+            ratios = hvp1[mask] / hvp2[mask]
+            assert torch.std(ratios).item() < 0.1, \
+                f"Ratio std too high: {torch.std(ratios).item()}"
+
+    def test_hvp_apply_low_rank_fallback_to_fisher(self, simple_model, batch_data):
+        """Test that low-rank HVP falls back to the Fisher implementation"""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+        v = torch.randn(param_count)
+
+        step_rec = StepRecord(
+            step_id=1,
+            eta=0.01,
+            batch_id="b1",
+            batch_data=batch_data
+        )
+
+        # Get result from low_rank mode (should fall back to fisher)
+        cfg_low_rank = HVPConfig(mode="low_rank", device="cpu")
+        hvp_low_rank = hvp_apply(v, step_rec, cfg_low_rank, simple_model)
+
+        # Get result from fisher mode directly
+        cfg_fisher = HVPConfig(mode="fisher", device="cpu")
+        hvp_fisher_direct = hvp_apply(v, step_rec, cfg_fisher, simple_model)
+
+        # They should be equal
+        assert torch.allclose(hvp_low_rank, hvp_fisher_direct, atol=1e-5), \
+            "low_rank fallback does not match fisher"
 
 
 # ============================================================================
@@ -474,6 +746,73 @@ class TestCorrectionComputation:
         assert torch.allclose(v, -u_tz)
         assert audit.K_used == 0
         assert audit.hvp_calls == 0
+
+    def test_compute_correction_with_privacy_noise(self, simple_model, hvp_config):
+        """Test correction computation with Phase 4 privacy noise"""
+        step_log = StepLog(max_size=100)
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+
+        u_tz = torch.randn(param_count)
+        step_log.add(StepRecord(
+            step_id=10,
+            eta=0.01,
+            batch_id="forget",
+            u=u_tz
+        ))
+
+        # Compute correction with privacy noise (epsilon > 0)
+        v, audit = compute_correction(
+            tz=10,
+            tau=15,
+            K=0,
+            step_log=step_log,
+            cfg=hvp_config,
+            model=simple_model,
+            epsilon=1.0,
+            delta=1e-5
+        )
+
+        # Check that noise was injected
+        assert audit.noise_injected is True
+        assert audit.epsilon == 1.0
+        assert audit.delta == 1e-5
+        assert audit.noise_sigma > 0
+
+        # v should NOT equal -u_tz due to noise
+        assert not torch.allclose(v, -u_tz)
+
+    def test_compute_correction_without_privacy_noise(self, simple_model, hvp_config):
+        """Test correction computation without privacy noise (epsilon=0)"""
+        step_log = StepLog(max_size=100)
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+
+        u_tz = torch.randn(param_count)
+        step_log.add(StepRecord(
+            step_id=10,
+            eta=0.01,
+            batch_id="forget",
+            u=u_tz
+        ))
+
+        # Compute correction without privacy noise (default epsilon=0)
+        v, audit = compute_correction(
+            tz=10,
+            tau=15,
+            K=0,
+            step_log=step_log,
+            cfg=hvp_config,
+            model=simple_model
+        )
+
+        # Check that noise was NOT injected
+        assert audit.noise_injected is False
+        assert audit.epsilon == 0.0
+        assert audit.noise_sigma == 0.0
+
+        # v should equal -u_tz
+        assert torch.allclose(v, -u_tz)
 
     def test_compute_correction_missing_step(self, simple_model, hvp_config):
         """Test correction with missing step record"""

@@ -5,11 +5,21 @@ LMCleaner Core Components: 在线遗忘的核心算法组件
 - HVP (Hessian-Vector Product) 计算
 - 参数校正向量计算 (前向K步传播)
 - 参数校正应用
+- 隐私噪声注入 (Phase 4 from paper)
 - 训练日志数据结构
 - 审计记录
+
+论文参考: LMCleaner: Efficient and Certified Online Unlearning via Truncated Influence Propagation
+
+实现与论文对齐说明:
+- Fisher HVP: 论文 Algorithm 1 使用 Hv = g · (g^T v) 近似
+- GGN HVP: 使用 Hv = ∇(g^T v) 近似 (更精确但计算量更大)
+- 隐私噪声: 论文 Phase 4 注入 N(0, σ²I) 实现 (ε,δ)-certified unlearning
+- 阻尼项: 实现添加的数值稳定化技术，论文理论分析未包含
 """
 
 import logging
+import math
 from collections import deque
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple, Callable, Any
@@ -23,15 +33,27 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AuditRecord(dict):
-    """审计记录，用于记录遗忘操作的详细信息"""
+    """审计记录，用于记录遗忘操作的详细信息
+
+    包含论文 Algorithm 1 各阶段的追踪信息:
+    - Phase 1: 初始偏差计算
+    - Phase 2: 截断影响传播
+    - Phase 3: 影响移除
+    - Phase 4: 隐私保护 (噪声注入)
+    """
 
     tz: int = 0  # 遗忘批次的步骤
     tau: int = 0  # 当前步骤
     K_used: int = 0  # 实际使用的截断窗口大小
-    v_norm: float = 0.0  # 校正向量的范数
+    v_norm: float = 0.0  # 校正向量的范数 (Phase 3 前)
     hvp_calls: int = 0  # HVP调用次数
-    mode: str = "GGN"  # Hessian模式
-    damping: float = 0.0  # 阻尼系数
+    mode: str = "GGN"  # Hessian模式: "fisher", "GGN", "diag", "exact"
+    damping: float = 0.0  # 阻尼系数 (实现添加，论文未包含)
+    # Phase 4: 隐私噪声相关
+    noise_sigma: float = 0.0  # 注入的噪声标准差 σ
+    noise_injected: bool = False  # 是否注入了隐私噪声
+    epsilon: float = 0.0  # (ε,δ)-certified unlearning 的 ε
+    delta: float = 0.0  # (ε,δ)-certified unlearning 的 δ
 
     def __post_init__(self):
         # 使其可以像字典一样使用
@@ -44,6 +66,10 @@ class AuditRecord(dict):
             hvp_calls=self.hvp_calls,
             mode=self.mode,
             damping=self.damping,
+            noise_sigma=self.noise_sigma,
+            noise_injected=self.noise_injected,
+            epsilon=self.epsilon,
+            delta=self.delta,
         )
 
 
@@ -104,17 +130,37 @@ class StepLog:
 
 
 class HVPConfig:
-    """HVP计算配置"""
+    """HVP计算配置
+
+    支持的 Hessian 近似模式:
+    - "fisher": 论文 Algorithm 1 使用的 Fisher 信息矩阵近似
+              Hv = g · (g^T v), 其中 g 是梯度向量
+              这是 rank-1 近似，计算高效但精度较低
+    - "GGN": 广义 Gauss-Newton 近似
+            Hv = ∇(g^T v) = ∇²L · v
+            使用二阶自动微分，更精确但计算量更大
+    - "diag": 对角 Hessian 近似
+    - "exact": 精确 Hessian-vector product (非常慢)
+
+    阻尼项说明 (damping):
+        论文原始算法不包含阻尼项。实现添加阻尼项 λ 用于数值稳定化:
+        v ← v - η[s] * (H[s] @ v) - η[s] * λ * v
+        等价于在 Hessian 上添加正则化: (H + λI) @ v
+        当 damping=0 时与论文算法一致。
+    """
 
     def __init__(
         self,
-        mode: str = "GGN",
-        damping: float = 1e-4,
+        mode: str = "fisher",  # 默认使用论文的 Fisher 近似
+        damping: float = 0.0,  # 默认不添加阻尼，与论文一致
         rank: int = 10,
         device: str = "cuda",
         dtype: torch.dtype = torch.float32,
     ):
-        self.mode = mode  # "GGN", "diag", "low_rank", "exact"
+        valid_modes = {"fisher", "GGN", "diag", "exact", "low_rank"}
+        if mode not in valid_modes:
+            raise ValueError(f"Unknown mode: {mode}. Valid modes: {valid_modes}")
+        self.mode = mode
         self.damping = damping
         self.rank = rank
         self.device = device
@@ -165,6 +211,73 @@ def hvp_exact(
     return _flatten(hvp)
 
 
+def hvp_fisher(
+    model: nn.Module,
+    batch_data: Dict[str, torch.Tensor],
+    v: torch.Tensor,
+    params: Optional[List[torch.nn.Parameter]] = None,
+    loss_fn: Optional[Callable] = None,
+) -> torch.Tensor:
+    """
+    Fisher 信息矩阵近似的 HVP (论文 Algorithm 1 使用的方法)
+
+    论文公式: Hv ← g · (g^T v)
+    其中 g 是损失关于参数的梯度向量
+
+    这是 rank-1 近似:
+    - H ≈ g g^T (外积)
+    - Hv = g (g^T v) = g * scalar
+
+    特点:
+    - 计算高效: 只需要一次梯度计算 + 向量点积
+    - 精度较低: rank-1 近似可能丢失 Hessian 的高阶信息
+    - 与论文一致: 这是论文 Algorithm 1 Line 6 描述的方法
+
+    Args:
+        model: 模型
+        batch_data: 批次数据
+        v: 向量
+        params: 参数列表 (如果为 None, 使用 model.parameters())
+        loss_fn: 自定义损失函数 (优先使用)
+
+    Returns:
+        Fisher 近似的 Hessian-vector product
+    """
+    if params is None:
+        params = [p for p in model.parameters() if p.requires_grad]
+
+    # 前向传播计算损失
+    model.zero_grad()
+    outputs = model(**batch_data)
+
+    # 优先使用显式提供的 loss_fn，与其他 HVP 路径保持一致
+    if loss_fn is not None:
+        loss = loss_fn(outputs, batch_data)
+    elif hasattr(outputs, "loss") and outputs.loss is not None:
+        loss = outputs.loss
+    else:
+        logits = outputs.logits if hasattr(outputs, "logits") else outputs
+        labels = batch_data.get("labels", None)
+        if labels is not None:
+            loss = torch.nn.functional.cross_entropy(
+                logits.view(-1, logits.size(-1)), labels.view(-1), reduction="mean"
+            )
+        else:
+            raise ValueError("No loss_fn, outputs.loss, or labels found")
+
+    # 计算梯度 g = ∇L
+    grads = torch.autograd.grad(loss, params)
+
+    # 展平梯度为向量
+    g = _flatten([grad.detach() for grad in grads])
+
+    # 计算 g^T v (标量)
+    g_dot_v = torch.dot(g, v)
+
+    # 返回 g * (g^T v) = Hv (Fisher 近似)
+    return g * g_dot_v
+
+
 def hvp_ggn(
     model: nn.Module,
     batch_data: Dict[str, torch.Tensor],
@@ -173,13 +286,21 @@ def hvp_ggn(
 ) -> torch.Tensor:
     """
     广义Gauss-Newton近似的HVP
-    对于交叉熵损失,这是稳定且高效的近似
+
+    注意: 这与论文 Algorithm 1 的 Fisher 近似不同!
+    论文使用: Hv = g · (g^T v) (rank-1 外积)
+    GGN 使用: Hv = ∇(g^T v) (通过二阶自动微分)
 
     GGN: H ≈ J^T H_loss J
     其中 J 是输出关于参数的Jacobian, H_loss 是损失关于输出的Hessian
 
     对于交叉熵: H_loss ≈ I (忽略二阶项)
     因此: Hv ≈ J^T (J v)
+
+    特点:
+    - 比 Fisher 更精确
+    - 需要二阶自动微分,计算量更大
+    - 适用于需要更高精度的场景
     """
     if params is None:
         params = [p for p in model.parameters() if p.requires_grad]
@@ -290,11 +411,15 @@ def hvp_apply(
     """
     应用HVP计算: 返回 H[s] @ v
 
+    注意: 当前实现使用当前模型参数 θ[τ] 计算 HVP，而非历史参数 θ[s]。
+    这是一个实现简化，可能在 τ - s 很大时引入额外误差。
+    论文的理论分析 (Proposition 1) 假设使用 θ[s] 处的 Hessian。
+
     Args:
         v: 输入向量
         step_rec: 步骤记录
         cfg: HVP配置
-        model: 模型
+        model: 模型 (注意: 使用当前参数，非历史参数)
         loss_fn: 损失函数
         batch_reconstructor: 批次重建器(当batch_data为None时使用)
 
@@ -329,11 +454,14 @@ def hvp_apply(
 
     # 确保数据在正确的设备上
     batch_data = {
-        k: v.to(cfg.device) if isinstance(v, torch.Tensor) else v
-        for k, v in batch_data.items()
+        k: val.to(cfg.device) if isinstance(val, torch.Tensor) else val
+        for k, val in batch_data.items()
     }
 
-    if mode == "diag":
+    if mode == "fisher":
+        # 论文 Algorithm 1 使用的方法: Hv = g · (g^T v)
+        return hvp_fisher(model, batch_data, v, loss_fn=loss_fn)
+    elif mode == "diag":
         return hvp_diagonal(model, batch_data, v, step_rec.diag_H)
     elif mode == "GGN":
         return hvp_ggn(model, batch_data, v)
@@ -341,10 +469,80 @@ def hvp_apply(
         return hvp_exact(model, loss_fn, batch_data, v)
     elif mode == "low_rank":
         # TODO: 实现低秩近似
-        logger.warning("Low-rank HVP not implemented, falling back to GGN")
-        return hvp_ggn(model, batch_data, v)
+        logger.warning("Low-rank HVP not implemented, falling back to fisher")
+        return hvp_fisher(model, batch_data, v, loss_fn=loss_fn)
     else:
         raise ValueError(f"Unknown hessian_mode: {mode}")
+
+
+def compute_noise_sigma(
+    delta_det: float,
+    epsilon: float,
+    delta: float,
+) -> float:
+    """
+    计算隐私噪声的标准差 σ (论文 Theorem 2)
+
+    论文公式:
+        σ ≥ (Δ_det / ε) * sqrt(2 * log(1.25 / δ))
+
+    其中:
+    - Δ_det: 近似误差上界 (deterministic approximation error bound)
+    - ε: 隐私参数 epsilon
+    - δ: 隐私参数 delta
+
+    Args:
+        delta_det: 近似误差上界 ||θ̂ - θ_ideal||₂ ≤ Δ_det
+        epsilon: 隐私参数 ε > 0
+        delta: 隐私参数 δ ∈ (0, 1)
+
+    Returns:
+        噪声标准差 σ
+
+    Note:
+        delta_det = 0 is valid (results in sigma = 0, meaning no noise needed).
+    """
+    if delta_det < 0:
+        raise ValueError(f"delta_det must be >= 0, got {delta_det}")
+    if epsilon <= 0:
+        raise ValueError(f"epsilon must be > 0, got {epsilon}")
+    if delta <= 0 or delta >= 1:
+        raise ValueError(f"delta must be in (0, 1), got {delta}")
+
+    sigma = (delta_det / epsilon) * math.sqrt(2 * math.log(1.25 / delta))
+    return sigma
+
+
+def inject_privacy_noise(
+    v: torch.Tensor,
+    sigma: float,
+    generator: Optional[torch.Generator] = None,
+) -> torch.Tensor:
+    """
+    注入隐私噪声 (论文 Algorithm 1 Phase 4)
+
+    论文公式:
+        θ̃[τ] ← θ̂[τ] + N(0, σ²I)
+
+    Args:
+        v: 校正向量 (将被添加噪声)
+        sigma: 噪声标准差 σ
+        generator: 随机数生成器 (用于可复现性)
+
+    Returns:
+        添加噪声后的向量: v + N(0, σ²I)
+    """
+    if sigma <= 0:
+        return v
+
+    noise = torch.randn(
+        v.shape,
+        dtype=v.dtype,
+        device=v.device,
+        generator=generator,
+    ) * sigma
+
+    return v + noise
 
 
 @torch.no_grad()
@@ -357,14 +555,23 @@ def compute_correction(
     model: nn.Module,
     loss_fn: Optional[Callable] = None,
     batch_reconstructor: Optional[Any] = None,
+    # Phase 4: 隐私噪声参数
+    epsilon: float = 0.0,
+    delta: float = 1e-5,
+    delta_det: Optional[float] = None,
 ) -> Tuple[torch.Tensor, AuditRecord]:
     """
-    计算参数校正向量(前向K步传播)
+    计算参数校正向量(前向K步传播) - 论文 Algorithm 1 完整实现
 
     算法:
-    1. 初始偏差: v0 = -u[tz] 或 v0 = η[tz] * gbar[tz]
-    2. 前向传播: v[s+1] = v[s] - η[s] * (H[s] @ v[s]) - η[s] * λ * v[s]
-    3. 返回最终的校正向量v
+    Phase 1: 计算初始偏差 v0 = -u[tz] 或 v0 = η[tz] * gbar[tz]
+    Phase 2: 前向传播 v[s+1] = v[s] - η[s] * (H[s] @ v[s]) - η[s] * λ * v[s]
+    Phase 3: 返回校正向量 v (将在外部应用: θ ← θ + v)
+    Phase 4: 可选的隐私噪声注入
+
+    注意 (与论文的差异):
+    - 阻尼项 λ 是实现添加的数值稳定化技术，论文理论分析未包含
+    - 设置 cfg.damping=0 以与论文算法完全一致
 
     Args:
         tz: 遗忘批次的步骤
@@ -375,6 +582,9 @@ def compute_correction(
         model: 模型
         loss_fn: 损失函数
         batch_reconstructor: 批次重建器(可选)
+        epsilon: 隐私参数 ε (>0 时启用噪声注入)
+        delta: 隐私参数 δ (默认 1e-5)
+        delta_det: 近似误差上界 (如果为 None, 使用 ||v||₂ 作为估计)
 
     Returns:
         (v, audit_record): 校正向量和审计记录
@@ -386,7 +596,7 @@ def compute_correction(
     if rec.u is None and (rec.gbar is None or rec.eta is None):
         raise ValueError(f"Step {tz} missing update vector u or (gbar, eta)")
 
-    # 1. 初始偏差 v0
+    # Phase 1: 初始偏差 v0
     if rec.u is not None:
         # v0 = -u[tz] = -(θ[tz+1] - θ[tz]) = θ[tz] - θ[tz+1]
         # 因为 u[tz] = -η[tz] * gbar[tz], 所以 -u[tz] = η[tz] * gbar[tz]
@@ -395,7 +605,7 @@ def compute_correction(
         # v0 = η[tz] * gbar[tz]
         v = rec.eta * rec.gbar.clone()
 
-    # 2. 前向传播窗口
+    # Phase 2: 前向传播窗口
     start = tz + 1
     end = min(tz + K, tau - 1)
     K_used = max(0, end - start + 1)
@@ -419,21 +629,57 @@ def compute_correction(
         # v ← v - η[s] * hvp
         v = v - srec.eta * hvp
 
-        # 添加阻尼: v ← v - η[s] * λ * v
+        # 添加阻尼: v ← v - η[s] * λ * v (实现添加，论文未包含)
         if cfg.damping > 0:
             v = v - srec.eta * cfg.damping * v
 
         hvp_calls += 1
 
-    # 3. 创建审计记录
+    # 记录 Phase 3 前的 v_norm
+    v_norm_before_noise = float(v.norm().item())
+
+    # Phase 4: 隐私噪声注入 (论文 Algorithm 1)
+    noise_sigma = 0.0
+    noise_injected = False
+
+    if epsilon > 0:
+        # 如果未提供 delta_det, 使用 v_norm 作为估计
+        # WARNING: v_norm 不是 ||θ̂ - θ_ideal||₂ 的保证上界
+        # 根据 Theorem 2, 应该提供一个经过证明的 Δ_det 上界
+        # 使用 v_norm 可能导致 σ 过小，从而无法保证 (ε,δ)-certified unlearning
+        if delta_det is None:
+            logger.warning(
+                "delta_det not provided, using v_norm as estimate. "
+                "This may not be a valid upper bound for certified unlearning. "
+                "For guaranteed (ε,δ)-certified unlearning, provide a proven Δ_det bound."
+            )
+            delta_det = v_norm_before_noise
+
+        # 计算噪声标准差
+        noise_sigma = compute_noise_sigma(delta_det, epsilon, delta)
+
+        # 注入噪声
+        v = inject_privacy_noise(v, noise_sigma)
+        noise_injected = True
+
+        logger.info(
+            f"Phase 4: Injected privacy noise with σ={noise_sigma:.6f} "
+            f"(ε={epsilon}, δ={delta})"
+        )
+
+    # 创建审计记录
     audit = AuditRecord(
         tz=tz,
         tau=tau,
         K_used=K_used,
-        v_norm=float(v.norm().item()),
+        v_norm=v_norm_before_noise,
         hvp_calls=hvp_calls,
         mode=cfg.hessian_mode,
         damping=cfg.damping,
+        noise_sigma=noise_sigma,
+        noise_injected=noise_injected,
+        epsilon=epsilon if noise_injected else 0.0,
+        delta=delta if noise_injected else 0.0,
     )
 
     return v, audit
