@@ -392,6 +392,16 @@ class TestPrivacyNoise:
         with pytest.raises(ValueError, match="delta must be in"):
             compute_noise_sigma(1.0, 1.0, 1.5)
 
+    def test_compute_noise_sigma_invalid_delta_det(self):
+        """Test that negative delta_det raises error"""
+        with pytest.raises(ValueError, match="delta_det must be >= 0"):
+            compute_noise_sigma(-1.0, 1.0, 1e-5)
+
+    def test_compute_noise_sigma_zero_delta_det(self):
+        """Test that delta_det=0 returns sigma=0 (valid edge case)"""
+        sigma = compute_noise_sigma(0.0, 1.0, 1e-5)
+        assert sigma == 0.0
+
     def test_inject_privacy_noise_basic(self):
         """Test basic noise injection"""
         v = torch.zeros(100)
@@ -584,6 +594,79 @@ class TestHVPComputation:
 
         with pytest.raises(ValueError, match="No batch data found"):
             hvp_apply(v, step_rec, hvp_config, simple_model)
+
+    def test_hvp_fisher_matches_manual_formula(self, simple_model, batch_data):
+        """Test that hvp_fisher computes Hv = g * (g^T v) exactly"""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+        v = torch.randn(param_count)
+
+        # Get HVP from function
+        hvp = hvp_fisher(simple_model, batch_data, v, params)
+
+        # Manually compute g and verify Hv = g * (g^T v)
+        simple_model.zero_grad()
+        outputs = simple_model(**batch_data)
+        loss = outputs.loss if hasattr(outputs, "loss") and outputs.loss is not None else \
+            torch.nn.functional.cross_entropy(
+                outputs.logits.view(-1, outputs.logits.size(-1)),
+                batch_data["labels"].view(-1)
+            )
+        grads = torch.autograd.grad(loss, params)
+        g = _flatten([grad.detach() for grad in grads])
+
+        # Expected: Hv = g * (g^T v)
+        expected_hvp = g * torch.dot(g, v)
+
+        assert torch.allclose(hvp, expected_hvp, atol=1e-5), \
+            f"HVP mismatch: max diff = {(hvp - expected_hvp).abs().max()}"
+
+    def test_hvp_fisher_rank_one_robust(self, simple_model, batch_data):
+        """Test rank-1 property with robustness check for zero gradients"""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+
+        v1 = torch.randn(param_count)
+        v2 = torch.randn(param_count)
+
+        hvp1 = hvp_fisher(simple_model, batch_data, v1, params)
+        hvp2 = hvp_fisher(simple_model, batch_data, v2, params)
+
+        # Verify both HVPs have some non-zero elements
+        assert hvp1.norm() > 1e-6 or hvp2.norm() > 1e-6, \
+            "Both HVPs are too small to verify rank-1 property"
+
+        # For rank-1 matrix, Hv1 and Hv2 should be parallel
+        mask = (torch.abs(hvp2) > 1e-6) & (torch.abs(hvp1) > 1e-6)
+        if mask.any():
+            ratios = hvp1[mask] / hvp2[mask]
+            assert torch.std(ratios).item() < 0.1, \
+                f"Ratio std too high: {torch.std(ratios).item()}"
+
+    def test_hvp_apply_low_rank_fallback_to_fisher(self, simple_model, batch_data):
+        """Test that low-rank HVP falls back to the Fisher implementation"""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+        v = torch.randn(param_count)
+
+        step_rec = StepRecord(
+            step_id=1,
+            eta=0.01,
+            batch_id="b1",
+            batch_data=batch_data
+        )
+
+        # Get result from low_rank mode (should fall back to fisher)
+        cfg_low_rank = HVPConfig(mode="low_rank", device="cpu")
+        hvp_low_rank = hvp_apply(v, step_rec, cfg_low_rank, simple_model)
+
+        # Get result from fisher mode directly
+        cfg_fisher = HVPConfig(mode="fisher", device="cpu")
+        hvp_fisher_direct = hvp_apply(v, step_rec, cfg_fisher, simple_model)
+
+        # They should be equal
+        assert torch.allclose(hvp_low_rank, hvp_fisher_direct, atol=1e-5), \
+            "low_rank fallback does not match fisher"
 
 
 # ============================================================================

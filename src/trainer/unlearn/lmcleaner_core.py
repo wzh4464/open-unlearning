@@ -216,6 +216,7 @@ def hvp_fisher(
     batch_data: Dict[str, torch.Tensor],
     v: torch.Tensor,
     params: Optional[List[torch.nn.Parameter]] = None,
+    loss_fn: Optional[Callable] = None,
 ) -> torch.Tensor:
     """
     Fisher 信息矩阵近似的 HVP (论文 Algorithm 1 使用的方法)
@@ -237,6 +238,7 @@ def hvp_fisher(
         batch_data: 批次数据
         v: 向量
         params: 参数列表 (如果为 None, 使用 model.parameters())
+        loss_fn: 自定义损失函数 (优先使用)
 
     Returns:
         Fisher 近似的 Hessian-vector product
@@ -248,7 +250,10 @@ def hvp_fisher(
     model.zero_grad()
     outputs = model(**batch_data)
 
-    if hasattr(outputs, "loss"):
+    # 优先使用显式提供的 loss_fn，与其他 HVP 路径保持一致
+    if loss_fn is not None:
+        loss = loss_fn(outputs, batch_data)
+    elif hasattr(outputs, "loss") and outputs.loss is not None:
         loss = outputs.loss
     else:
         logits = outputs.logits if hasattr(outputs, "logits") else outputs
@@ -258,7 +263,7 @@ def hvp_fisher(
                 logits.view(-1, logits.size(-1)), labels.view(-1), reduction="mean"
             )
         else:
-            raise ValueError("No loss or labels found")
+            raise ValueError("No loss_fn, outputs.loss, or labels found")
 
     # 计算梯度 g = ∇L
     grads = torch.autograd.grad(loss, params)
@@ -455,7 +460,7 @@ def hvp_apply(
 
     if mode == "fisher":
         # 论文 Algorithm 1 使用的方法: Hv = g · (g^T v)
-        return hvp_fisher(model, batch_data, v)
+        return hvp_fisher(model, batch_data, v, loss_fn=loss_fn)
     elif mode == "diag":
         return hvp_diagonal(model, batch_data, v, step_rec.diag_H)
     elif mode == "GGN":
@@ -465,7 +470,7 @@ def hvp_apply(
     elif mode == "low_rank":
         # TODO: 实现低秩近似
         logger.warning("Low-rank HVP not implemented, falling back to fisher")
-        return hvp_fisher(model, batch_data, v)
+        return hvp_fisher(model, batch_data, v, loss_fn=loss_fn)
     else:
         raise ValueError(f"Unknown hessian_mode: {mode}")
 
@@ -493,7 +498,12 @@ def compute_noise_sigma(
 
     Returns:
         噪声标准差 σ
+
+    Note:
+        delta_det = 0 is valid (results in sigma = 0, meaning no noise needed).
     """
+    if delta_det < 0:
+        raise ValueError(f"delta_det must be >= 0, got {delta_det}")
     if epsilon <= 0:
         raise ValueError(f"epsilon must be > 0, got {epsilon}")
     if delta <= 0 or delta >= 1:
@@ -633,8 +643,16 @@ def compute_correction(
     noise_injected = False
 
     if epsilon > 0:
-        # 如果未提供 delta_det, 使用 v_norm 作为保守估计
+        # 如果未提供 delta_det, 使用 v_norm 作为估计
+        # WARNING: v_norm 不是 ||θ̂ - θ_ideal||₂ 的保证上界
+        # 根据 Theorem 2, 应该提供一个经过证明的 Δ_det 上界
+        # 使用 v_norm 可能导致 σ 过小，从而无法保证 (ε,δ)-certified unlearning
         if delta_det is None:
+            logger.warning(
+                "delta_det not provided, using v_norm as estimate. "
+                "This may not be a valid upper bound for certified unlearning. "
+                "For guaranteed (ε,δ)-certified unlearning, provide a proven Δ_det bound."
+            )
             delta_det = v_norm_before_noise
 
         # 计算噪声标准差
