@@ -1,17 +1,27 @@
 """
 LMCleaner Batch-Level Implementation: 批次级在线遗忘
 
-算法特点:
-- 初始偏差: δ[tz+1] = -η_tz * gbar[tz] (或直接使用记录的u[tz])
-- 存储复杂度: O((N/B) * p) vs 样本级的 O(N * p)
-- 前向K步传播: v[s+1] = (I - η_s H[s]) v[s]
-- 参数校正: θ̂[τ] = θ[τ] + v
+论文: LMCleaner: Efficient and Certified Online Unlearning via Truncated Influence Propagation
+
+算法特点 (论文 Algorithm 1):
+- Phase 1: 初始偏差 v = θ[t_z+1] - θ[t_z] = -u[t_z]
+- Phase 2: 截断影响传播 v[s+1] = (I - η_s H[s]) v[s], s ∈ [t_z+1, min(t_z+K, τ-1)]
+- Phase 3: 影响移除 θ̂[τ] = θ[τ] - v (实现中: θ ← θ + v, 因为 v = -u)
+- Phase 4: 隐私保护 θ̃[τ] = θ̂[τ] + N(0, σ²I) 实现 (ε,δ)-certified unlearning
+
+存储复杂度: O((N/B) * p) vs 样本级的 O(N * p)
 
 用法:
 1. 预训练时使用TrainingLogger记录训练轨迹
 2. 加载预训练模型和训练日志
 3. 运行遗忘(自动应用参数校正)
 4. 评估遗忘效果
+
+实现说明:
+- hessian_mode="fisher": 论文 Algorithm 1 使用的方法 Hv = g·(g^T v)
+- hessian_mode="GGN": 使用二阶自动微分，更精确但计算量更大
+- epsilon > 0: 启用 Phase 4 隐私噪声注入
+- damping=0: 与论文一致 (damping>0 是额外的数值稳定化)
 """
 
 import gc
@@ -29,6 +39,8 @@ from .lmcleaner_core import (
     StepRecord,
     compute_correction,
     apply_correction,
+    compute_noise_sigma,
+    inject_privacy_noise,
 )
 from ..training_logger import TrainingLogger, BatchReconstructor, LazyRecordLoader
 
@@ -39,28 +51,43 @@ class LMCleanerBatchLevel(UnlearnTrainer):
     """
     批次级LMCleaner在线遗忘
 
+    实现论文 Algorithm 1 的完整四阶段算法:
+    - Phase 1: 初始偏差计算
+    - Phase 2: 截断影响传播 (K步)
+    - Phase 3: 影响移除
+    - Phase 4: 隐私噪声注入 (可选, 实现 certified unlearning)
+
     Args:
         training_log_dir: 训练日志目录(TrainingLogger输出)
-        K: 截断窗口大小
-        hessian_mode: HVP模式 ("GGN", "diag", "exact", "low_rank")
-        damping: 阻尼系数λ
+        K: 截断窗口大小 (论文建议 K=64-1000)
+        hessian_mode: HVP模式
+            - "fisher": 论文 Algorithm 1 使用的 Fisher 近似 Hv = g·(g^T v)
+            - "GGN": 广义 Gauss-Newton 近似 (更精确但计算量更大)
+            - "diag": 对角 Hessian 近似
+            - "exact": 精确 HVP (非常慢)
+        damping: 阻尼系数λ (论文未包含，默认0以与论文一致)
         max_step: 最大步数(用于epoch-based评估,只考虑<=max_step的步骤)
         apply_immediately: 是否在初始化时立即应用遗忘(否则在train()时)
         audit_dir: 审计日志输出目录
+        epsilon: 隐私参数 ε (>0 时启用 Phase 4 噪声注入)
+        delta: 隐私参数 δ (默认 1e-5)
     """
 
     def __init__(
         self,
         training_log_dir: str,
         K: int = 800,
-        hessian_mode: str = "GGN",
-        damping: float = 1e-4,
+        hessian_mode: str = "fisher",  # 默认使用论文的 Fisher 近似
+        damping: float = 0.0,  # 默认不添加阻尼，与论文一致
         max_step: Optional[int] = None,
         apply_immediately: bool = False,
         audit_dir: Optional[str] = None,
         finetune_dataset_path: str = "locuslab/TOFU",
         finetune_dataset_name: str = "full",
         finetune_dataset_split: str = "train",
+        # Phase 4: 隐私噪声参数
+        epsilon: float = 0.0,  # 默认不注入噪声
+        delta: float = 1e-5,
         *args,
         **kwargs,
     ):
@@ -78,6 +105,10 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         self.damping = damping
         self.max_step = max_step
         self.apply_immediately = apply_immediately
+
+        # Phase 4: 隐私参数
+        self.epsilon = epsilon
+        self.delta = delta
 
         # HVP配置
         self.hvp_config = HVPConfig(
@@ -112,7 +143,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
 
         logger.info(
             f"LMCleanerBatchLevel initialized: K={K}, hessian_mode={hessian_mode}, "
-            f"damping={damping}"
+            f"damping={damping}, epsilon={epsilon}, delta={delta}"
         )
 
         # 立即应用遗忘(如果设置)
@@ -297,8 +328,8 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                 hvp_calls = 0
                 K_used = 0
 
-                # 前向传播: v[s+1] = v[s] - eta[s] * H[s] @ v[s]
-                logger.debug(f"  Starting forward propagation...")
+                # Phase 2: 前向传播 v[s+1] = v[s] - eta[s] * H[s] @ v[s]
+                logger.debug("  Starting forward propagation (Phase 2)...")
                 for s_idx, s in enumerate(propagation_steps):
                     if s_idx % 50 == 0:
                         logger.debug(f"    HVP progress: {s_idx}/{len(propagation_steps)}")
@@ -322,17 +353,24 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                         }
 
                         # 计算 HVP: H[s] @ v
-                        from .lmcleaner_core import hvp_ggn, hvp_diagonal
+                        # 根据 hessian_mode 选择不同的 HVP 近似方法
+                        from .lmcleaner_core import hvp_ggn, hvp_diagonal, hvp_fisher
                         with torch.enable_grad():
-                            if self.hessian_mode == "GGN":
+                            if self.hessian_mode == "fisher":
+                                # 论文 Algorithm 1 使用的方法: Hv = g · (g^T v)
+                                hvp = hvp_fisher(self.model, batch_data, v)
+                            elif self.hessian_mode == "GGN":
                                 hvp = hvp_ggn(self.model, batch_data, v)
-                            else:
+                            elif self.hessian_mode == "diag":
                                 hvp = hvp_diagonal(self.model, batch_data, v, None)
+                            else:
+                                # 默认使用 fisher (论文方法)
+                                hvp = hvp_fisher(self.model, batch_data, v)
 
                         # 更新 v: v ← v - eta[s] * hvp
                         v = v - eta_s * hvp
 
-                        # 阻尼: v ← v - eta[s] * lambda * v
+                        # 阻尼: v ← v - eta[s] * lambda * v (实现添加，论文未包含)
                         if self.damping > 0:
                             v = v - eta_s * self.damping * v
 
@@ -344,27 +382,47 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                     else:
                         logger.warning(f"No batch_reconstructor, cannot compute HVP for step {s}")
 
-                # 应用校正
+                # 记录 Phase 3 前的 v_norm
+                v_norm_before_noise = v.norm().item()
+
+                # Phase 4: 隐私噪声注入 (论文 Algorithm 1)
+                noise_sigma = 0.0
+                noise_injected = False
+
+                if self.epsilon > 0:
+                    # 使用 v_norm 作为 delta_det 的保守估计
+                    delta_det = v_norm_before_noise
+                    noise_sigma = compute_noise_sigma(delta_det, self.epsilon, self.delta)
+                    v = inject_privacy_noise(v, noise_sigma)
+                    noise_injected = True
+                    logger.info(
+                        f"  Phase 4: Injected privacy noise σ={noise_sigma:.6f} "
+                        f"(ε={self.epsilon}, δ={self.delta})"
+                    )
+
+                # Phase 3: 应用校正 θ ← θ + v
                 apply_correction(v, params)
 
-                # 计算 v_norm
-                v_norm = v.norm().item()
-
                 # 创建审计记录
-                audit = {
-                    "tz": tz,
-                    "tau": tau,
-                    "K_used": K_used,
-                    "v_norm": v_norm,
-                    "hvp_calls": hvp_calls,
-                    "mode": self.hessian_mode,
-                    "damping": self.damping,
-                }
+                audit = AuditRecord(
+                    tz=tz,
+                    tau=tau,
+                    K_used=K_used,
+                    v_norm=v_norm_before_noise,
+                    hvp_calls=hvp_calls,
+                    mode=self.hessian_mode,
+                    damping=self.damping,
+                    noise_sigma=noise_sigma,
+                    noise_injected=noise_injected,
+                    epsilon=self.epsilon if noise_injected else 0.0,
+                    delta=self.delta if noise_injected else 0.0,
+                )
                 self.audit_records.append(audit)
 
                 logger.info(
                     f"Applied correction for step {tz}: "
-                    f"v_norm={v_norm:.6f}, K_used={K_used}, hvp_calls={hvp_calls}"
+                    f"v_norm={v_norm_before_noise:.6f}, K_used={K_used}, hvp_calls={hvp_calls}"
+                    + (f", noise_σ={noise_sigma:.6f}" if noise_injected else "")
                 )
 
                 # 清理内存
