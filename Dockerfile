@@ -17,15 +17,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# Install global npm packages (gemini CLI)
-RUN npm install -g @google/gemini-cli
+# Install global npm packages (gemini CLI, Claude Code CLI)
+RUN npm install -g @google/gemini-cli @anthropic-ai/claude-code
 
 # Install Python dev tools
 RUN pip install --no-cache-dir ruff pytest uv
-
-# Install Claude Code CLI
-RUN curl -fsSL https://claude.ai/install.sh | sh && \
-    echo 'export PATH=$PATH:/root/.local/bin' >> /etc/bash.bashrc
 
 WORKDIR /app
 
@@ -56,7 +52,6 @@ COPY . .
 
 # Environment variables
 ENV IN_DOCKER=1
-ENV PATH="/root/.local/bin:${PATH}"
 
 # Git config
 RUN git config --global user.name "runpod_zihan" && \
