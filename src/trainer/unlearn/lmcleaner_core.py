@@ -22,8 +22,9 @@ import logging
 import math
 from collections import deque
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Callable, Any
+from typing import Dict, List, Optional, Tuple, Callable, Any, Protocol, Union
 import weakref
+import gc
 
 import torch
 import torch.nn as nn
@@ -90,6 +91,25 @@ class StepRecord:
         return (
             f"StepRecord(step={self.step_id}, eta={self.eta}, batch_id={self.batch_id})"
         )
+
+
+class LazyLoaderProtocol(Protocol):
+    """Protocol for lazy record loaders that support on-demand loading."""
+
+    def load_single_step(
+        self, step_id: int, include_tensors: bool = True
+    ) -> Optional[Dict]:
+        """Load a single step record on demand."""
+        ...
+
+    def get_etas_for_steps(self, step_ids: List[int]) -> Dict[int, float]:
+        """Get eta (learning rate) values for multiple steps."""
+        ...
+
+    @property
+    def sample_indices(self) -> Dict[int, List[int]]:
+        """Get sample indices mapping."""
+        ...
 
 
 class StepLog:
@@ -550,7 +570,7 @@ def compute_correction(
     tz: int,
     tau: int,
     K: int,
-    step_log: StepLog,
+    step_log: Optional[StepLog],
     cfg: HVPConfig,
     model: nn.Module,
     loss_fn: Optional[Callable] = None,
@@ -559,6 +579,9 @@ def compute_correction(
     epsilon: float = 0.0,
     delta: float = 1e-5,
     delta_det: Optional[float] = None,
+    # On-demand loading support for large K values
+    lazy_loader: Optional[LazyLoaderProtocol] = None,
+    initial_record: Optional[StepRecord] = None,
 ) -> Tuple[torch.Tensor, AuditRecord]:
     """
     计算参数校正向量(前向K步传播) - 论文 Algorithm 1 完整实现
@@ -577,7 +600,7 @@ def compute_correction(
         tz: 遗忘批次的步骤
         tau: 当前步骤
         K: 截断窗口大小
-        step_log: 步骤日志
+        step_log: 步骤日志 (如果 lazy_loader 提供，可以为 None)
         cfg: HVP配置
         model: 模型
         loss_fn: 损失函数
@@ -585,11 +608,23 @@ def compute_correction(
         epsilon: 隐私参数 ε (>0 时启用噪声注入)
         delta: 隐私参数 δ (默认 1e-5)
         delta_det: 近似误差上界 (如果为 None, 使用 ||v||₂ 作为估计)
+        lazy_loader: 懒加载器，用于大 K 值时按需加载记录 (避免 OOM)
+        initial_record: 初始步骤记录 (tz 对应的记录，用于 Phase 1)
 
     Returns:
         (v, audit_record): 校正向量和审计记录
     """
-    rec = step_log[tz]
+    # 确定是否使用 lazy loading 模式
+    use_lazy_loading = lazy_loader is not None
+
+    # 获取初始记录
+    if initial_record is not None:
+        rec = initial_record
+    elif step_log is not None:
+        rec = step_log[tz]
+    else:
+        raise ValueError("Either step_log or initial_record must be provided")
+
     if rec is None:
         raise ValueError(f"Step {tz} not found in step log")
 
@@ -605,6 +640,14 @@ def compute_correction(
         # v0 = η[tz] * gbar[tz]
         v = rec.eta * rec.gbar.clone()
 
+    # 确保 v 在正确的设备上 (从训练日志加载的 u/gbar 可能在 CPU 上)
+    v = v.to(cfg.device)
+
+    # 清理初始记录
+    if use_lazy_loading and initial_record is not None:
+        del rec
+        gc.collect()
+
     # Phase 2: 前向传播窗口
     start = tz + 1
     end = min(tz + K, tau - 1)
@@ -612,28 +655,83 @@ def compute_correction(
 
     hvp_calls = 0
 
-    # 检查是否有足够的步骤记录
-    if not step_log.has_range(start, end):
-        logger.warning(f"Missing some steps in range [{start}, {end}]")
+    # 检查是否有足够的步骤记录 (only for non-lazy mode)
+    if not use_lazy_loading and step_log is not None:
+        if not step_log.has_range(start, end):
+            logger.warning(f"Missing some steps in range [{start}, {end}]")
+
+    # 预先获取所有需要的 eta 值 (轻量操作，可以批量获取)
+    if use_lazy_loading and lazy_loader is not None:
+        needed_steps = list(range(start, end + 1))
+        eta_map = lazy_loader.get_etas_for_steps(needed_steps)
+    else:
+        eta_map = None
 
     for s in range(start, end + 1):
-        srec = step_log[s]
-        if srec is None:
-            logger.warning(f"Step {s} not found, skipping")
-            continue
+        # 获取步骤记录
+        if use_lazy_loading and lazy_loader is not None:
+            # 优化: 当 batch_reconstructor 可用时，只需要 eta，无需加载完整 tensor
+            # 这避免了每次 HVP 调用都加载 2.4GB 的 pickle 文件
+            if batch_reconstructor is not None and cfg.hessian_mode in ("GGN", "fisher"):
+                # 使用预加载的 eta_map，无需加载完整记录
+                if s not in eta_map:
+                    logger.warning(f"Step {s} eta not found, skipping")
+                    continue
+                # 创建轻量级 StepRecord，只包含 HVP 计算所需的最小信息
+                srec = StepRecord(
+                    step_id=s,
+                    eta=eta_map[s],
+                    batch_id=s,  # batch_id will be used by batch_reconstructor
+                    u=None,
+                    gbar=None,
+                    diag_H=None,
+                    batch_data=None,  # Will be reconstructed by batch_reconstructor
+                )
+            else:
+                # 需要加载完整记录 (如 diag 模式需要 diag_H)
+                rec_dict = lazy_loader.load_single_step(s, include_tensors=True)
+                if rec_dict is None:
+                    logger.warning(f"Step {s} not found, skipping")
+                    continue
+                srec = StepRecord(
+                    step_id=rec_dict["step_id"],
+                    eta=rec_dict["eta"],
+                    batch_id=rec_dict["batch_id"],
+                    u=rec_dict.get("u"),
+                    gbar=rec_dict.get("gbar"),
+                    diag_H=rec_dict.get("diag_H"),
+                    batch_data=rec_dict.get("batch_data"),
+                )
+                del rec_dict
+        else:
+            srec = step_log[s] if step_log else None
+            if srec is None:
+                logger.warning(f"Step {s} not found, skipping")
+                continue
 
         # 计算 H[s] @ v
         with torch.enable_grad():
             hvp = hvp_apply(v, srec, cfg, model, loss_fn, batch_reconstructor)
 
+        # 获取 eta 值
+        eta = srec.eta
+
         # v ← v - η[s] * hvp
-        v = v - srec.eta * hvp
+        v = v - eta * hvp
 
         # 添加阻尼: v ← v - η[s] * λ * v (实现添加，论文未包含)
         if cfg.damping > 0:
-            v = v - srec.eta * cfg.damping * v
+            v = v - eta * cfg.damping * v
 
         hvp_calls += 1
+
+        # 清理当前记录 (lazy loading 模式)
+        if use_lazy_loading:
+            del srec, hvp
+            if hvp_calls % 50 == 0:
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
     # 记录 Phase 3 前的 v_norm
     v_norm_before_noise = float(v.norm().item())

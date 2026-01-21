@@ -287,43 +287,38 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             logger.info(f"Processing forget step {i + 1}/{len(forget_steps)}: tz={tz}")
 
             try:
-                # 计算需要加载的步骤范围
-                start_step = tz
-                end_step = min(tz + self.K, tau - 1)
-                needed_steps = list(range(start_step, end_step + 1))
+                # 只加载初始记录 (tz 对应的记录，用于 Phase 1)
+                initial_rec_dict = self.lazy_loader.load_single_step(tz, include_tensors=True)
 
-                # 按需加载这些步骤的记录
-                records = self.lazy_loader.load_steps(needed_steps, include_tensors=True)
-
-                if not records:
-                    logger.warning(f"No records found for step {tz}, skipping")
+                if initial_rec_dict is None:
+                    logger.warning(f"No record found for step {tz}, skipping")
                     continue
-                
-                # 创建临时的 StepLog
-                temp_step_log = StepLog(max_size=len(records) + 10)
-                for rec_dict in records:
-                    step_record = StepRecord(
-                        step_id=rec_dict["step_id"],
-                        eta=rec_dict["eta"],
-                        batch_id=rec_dict["batch_id"],
-                        u=rec_dict.get("u"),
-                        gbar=rec_dict.get("gbar"),
-                        diag_H=rec_dict.get("diag_H"),
-                        batch_data=rec_dict.get("batch_data"),
-                    )
-                    temp_step_log.add(step_record)
-                
-                # 调用核心计算函数
+
+                # 创建初始 StepRecord
+                initial_record = StepRecord(
+                    step_id=initial_rec_dict["step_id"],
+                    eta=initial_rec_dict["eta"],
+                    batch_id=initial_rec_dict["batch_id"],
+                    u=initial_rec_dict.get("u"),
+                    gbar=initial_rec_dict.get("gbar"),
+                    diag_H=initial_rec_dict.get("diag_H"),
+                    batch_data=initial_rec_dict.get("batch_data"),
+                )
+                del initial_rec_dict  # 释放原始 dict
+
+                # 调用核心计算函数 (使用 lazy loading 模式)
                 v, audit = compute_correction(
                     tz=tz,
                     tau=tau,
                     K=self.K,
-                    step_log=temp_step_log,
+                    step_log=None,  # 不使用预加载的 step_log
                     cfg=self.hvp_config,
                     model=self.model,
                     batch_reconstructor=self.batch_reconstructor,
                     epsilon=self.epsilon,
-                    delta=self.delta
+                    delta=self.delta,
+                    lazy_loader=self.lazy_loader,  # 传入 lazy_loader 用于按需加载
+                    initial_record=initial_record,  # 传入初始记录
                 )
 
                 # Phase 3: 应用校正
@@ -337,7 +332,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                 )
 
                 # 清理内存
-                del records, temp_step_log, v
+                del initial_record, v
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
