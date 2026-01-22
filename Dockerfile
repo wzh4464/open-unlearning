@@ -18,6 +18,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Install global npm packages (gemini CLI, Claude Code CLI)
+# Note: Using npm for Claude Code to avoid geo-blocking from claude.ai/install.sh
 RUN npm install -g @google/gemini-cli @anthropic-ai/claude-code
 
 # Install Python dev tools
@@ -52,6 +53,16 @@ COPY . .
 
 # Environment variables
 ENV IN_DOCKER=1
+# npm global bin is already in PATH via node installation
+# Keep /root/.local/bin for other tools
+ENV PATH="/root/.local/bin:${PATH}"
+ENV GOOGLE_CLOUD_PROJECT=unlearning-484901
+
+# Persist environment variables for interactive shells (RunPod web terminal, SSH)
+RUN echo 'export IN_DOCKER=1' >> /etc/bash.bashrc && \
+    echo 'export GOOGLE_CLOUD_PROJECT=unlearning-484901' >> /etc/bash.bashrc && \
+    echo 'IN_DOCKER=1' >> /etc/environment && \
+    echo 'GOOGLE_CLOUD_PROJECT=unlearning-484901' >> /etc/environment
 
 # Git config
 RUN git config --global user.name "runpod_zihan" && \
