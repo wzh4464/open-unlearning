@@ -322,8 +322,15 @@ def hvp_ggn(
     - 需要二阶自动微分,计算量更大
     - 适用于需要更高精度的场景
     """
+    from torch.nn.attention import sdpa_kernel, SDPBackend
+
     if params is None:
         params = [p for p in model.parameters() if p.requires_grad]
+
+    # Ensure v is on the same device as model parameters (A40 GPU fix)
+    device = params[0].device if params else v.device
+    if v.device != device:
+        v = v.to(device)
 
     # 分解v为参数形状
     v_list = _unflatten_like(v, params)
@@ -333,7 +340,10 @@ def hvp_ggn(
 
     # 使用torch.func.jvp计算Jacobian-vector product
     # 首先前向传播
-    outputs = model(**batch_data)
+    # NOTE: Use MATH backend for SDPA to support 2nd order gradients (A40 GPU)
+    # Flash/Memory-efficient attention don't support 2nd order derivatives
+    with sdpa_kernel(SDPBackend.MATH):
+        outputs = model(**batch_data)
     logits = outputs.logits if hasattr(outputs, "logits") else outputs
 
     # 计算 ∇params(output) @ v
@@ -393,11 +403,15 @@ def hvp_diagonal(
         return diag_H * v
 
     # 如果没有预计算,需要计算对角Hessian
+    from torch.nn.attention import sdpa_kernel, SDPBackend
+
     if params is None:
         params = [p for p in model.parameters() if p.requires_grad]
 
     model.zero_grad()
-    outputs = model(**batch_data)
+    # NOTE: Use MATH backend for SDPA to support 2nd order gradients (A40 GPU)
+    with sdpa_kernel(SDPBackend.MATH):
+        outputs = model(**batch_data)
     loss = outputs.loss if hasattr(outputs, "loss") else outputs
 
     # 计算梯度
