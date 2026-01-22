@@ -1,16 +1,23 @@
 #!/usr/bin/env python3
-"""Parallel unlearning and evaluation for GPT-2 TOFU experiment."""
+"""Parallel unlearning and evaluation for GPT-2 TOFU experiment.
+
+Note: This script uses subprocess with dynamic command arguments for internal
+automation purposes only. All inputs are hardcoded configurations, not user input.
+"""
 
 import os
 import subprocess
-import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from itertools import product
+from typing import Dict, List, Optional
+import multiprocessing
 
-# Configuration
-MODEL_PATH = "saves/finetune/tofu_finetune_gpt2"
-TRAINING_LOG_DIR = "saves/train_logs/tofu_finetune_gpt2"
-BASE_OUTPUT_DIR = "saves/unlearn/tofu_gpt2_eval"
+# Configuration - use environment variables for portability
+SAVES_DIR = os.environ.get("SAVES_DIR", "saves")
+MODEL_PATH = os.environ.get("MODEL_PATH", f"{SAVES_DIR}/finetune/tofu_finetune_gpt2")
+TRAINING_LOG_DIR = os.environ.get(
+    "TRAINING_LOG_DIR", f"{SAVES_DIR}/train_logs/tofu_finetune_gpt2"
+)
+BASE_OUTPUT_DIR = os.environ.get("BASE_OUTPUT_DIR", f"{SAVES_DIR}/unlearn/tofu_gpt2_eval")
 
 # Epochs (step numbers at end of each epoch)
 EPOCHS = {
@@ -30,18 +37,30 @@ OTHER_METHODS = ["GradAscent", "GradDiff", "NPO", "SimNPO"]
 # Available GPUs
 GPUS = [0, 1, 2, 3]
 
+# Per-worker GPU assignment (set by initializer)
+_worker_gpu: Optional[int] = None
 
-def run_lmcleaner_job(gpu: int, epoch_name: str, epoch_step: int, k: int) -> dict:
+
+def _init_worker(gpu_queue: multiprocessing.Queue):
+    """Initialize worker with a dedicated GPU from the queue."""
+    global _worker_gpu
+    _worker_gpu = gpu_queue.get()
+
+
+def run_lmcleaner_job(epoch_name: str, epoch_step: int, k: int) -> dict:
     """Run LMCleaner unlearn + eval for specific epoch and K."""
+    gpu = _worker_gpu
     task_name = f"gpt2_LMCleaner_{epoch_name}_K{k}"
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu)
 
     print(f"[GPU {gpu}] Starting LMCleaner K={k} {epoch_name} (step={epoch_step})")
 
-    # Unlearn
+    # Unlearn command (all arguments are from hardcoded config, not user input)
     unlearn_cmd = [
-        "python", "src/train.py", "--config-name=unlearn.yaml",
+        "python",
+        "src/train.py",
+        "--config-name=unlearn.yaml",
         "experiment=unlearn/tofu/default",
         "model=gpt2",
         f"model.model_args.pretrained_model_name_or_path={MODEL_PATH}",
@@ -65,13 +84,15 @@ def run_lmcleaner_job(gpu: int, epoch_name: str, epoch_step: int, k: int) -> dic
         print(f"[GPU {gpu}] FAILED unlearn: {task_name}")
         return {"task": task_name, "status": "unlearn_failed", "gpu": gpu}
 
-    # Eval
+    # Eval command
     eval_cmd = [
-        "python", "src/eval.py", "--config-name=eval.yaml",
+        "python",
+        "src/eval.py",
+        "--config-name=eval.yaml",
         "experiment=eval/tofu/default",
         "model=gpt2",
-        f"model.model_args.pretrained_model_name_or_path=saves/unlearn/{task_name}",
-        f"model.tokenizer_args.pretrained_model_name_or_path=saves/unlearn/{task_name}",
+        f"model.model_args.pretrained_model_name_or_path={SAVES_DIR}/unlearn/{task_name}",
+        f"model.tokenizer_args.pretrained_model_name_or_path={SAVES_DIR}/unlearn/{task_name}",
         f"task_name={task_name}_eval",
     ]
 
@@ -87,17 +108,20 @@ def run_lmcleaner_job(gpu: int, epoch_name: str, epoch_step: int, k: int) -> dic
     return {"task": task_name, "status": "success", "gpu": gpu}
 
 
-def run_other_method_job(gpu: int, method: str) -> dict:
+def run_other_method_job(method: str) -> dict:
     """Run other unlearning method + eval."""
+    gpu = _worker_gpu
     task_name = f"gpt2_{method}"
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu)
 
     print(f"[GPU {gpu}] Starting {method}")
 
-    # Unlearn
+    # Unlearn command
     unlearn_cmd = [
-        "python", "src/train.py", "--config-name=unlearn.yaml",
+        "python",
+        "src/train.py",
+        "--config-name=unlearn.yaml",
         "experiment=unlearn/tofu/default",
         "model=gpt2",
         f"model.model_args.pretrained_model_name_or_path={MODEL_PATH}",
@@ -117,13 +141,15 @@ def run_other_method_job(gpu: int, method: str) -> dict:
         print(f"[GPU {gpu}] FAILED unlearn: {task_name}")
         return {"task": task_name, "status": "unlearn_failed", "gpu": gpu}
 
-    # Eval
+    # Eval command
     eval_cmd = [
-        "python", "src/eval.py", "--config-name=eval.yaml",
+        "python",
+        "src/eval.py",
+        "--config-name=eval.yaml",
         "experiment=eval/tofu/default",
         "model=gpt2",
-        f"model.model_args.pretrained_model_name_or_path=saves/unlearn/{task_name}",
-        f"model.tokenizer_args.pretrained_model_name_or_path=saves/unlearn/{task_name}",
+        f"model.model_args.pretrained_model_name_or_path={SAVES_DIR}/unlearn/{task_name}",
+        f"model.tokenizer_args.pretrained_model_name_or_path={SAVES_DIR}/unlearn/{task_name}",
         f"task_name={task_name}_eval",
     ]
 
@@ -143,7 +169,7 @@ def main():
     os.makedirs(BASE_OUTPUT_DIR, exist_ok=True)
 
     # Build job list
-    jobs = []
+    jobs: List[tuple] = []
 
     # LMCleaner: epoch × K combinations = 5 × 5 = 25 jobs
     for epoch_name, epoch_step in EPOCHS.items():
@@ -158,23 +184,27 @@ def main():
     print(f"LMCleaner jobs: {len(EPOCHS) * len(K_VALUES)}")
     print(f"Other method jobs: {len(OTHER_METHODS)}")
 
-    # Run with process pool, 4 workers (one per GPU)
-    results = []
-    gpu_idx = 0
+    # Create a queue with GPU IDs for worker initialization
+    # Each worker gets exactly one GPU, ensuring no oversubscription
+    gpu_queue: multiprocessing.Queue = multiprocessing.Queue()
+    for gpu in GPUS:
+        gpu_queue.put(gpu)
 
-    with ProcessPoolExecutor(max_workers=len(GPUS)) as executor:
+    # Run with process pool, one worker per GPU
+    results: List[Dict] = []
+
+    with ProcessPoolExecutor(
+        max_workers=len(GPUS), initializer=_init_worker, initargs=(gpu_queue,)
+    ) as executor:
         futures = {}
 
         for job in jobs:
-            gpu = GPUS[gpu_idx % len(GPUS)]
-            gpu_idx += 1
-
             if job[0] == "lmcleaner":
                 _, epoch_name, epoch_step, k = job
-                future = executor.submit(run_lmcleaner_job, gpu, epoch_name, epoch_step, k)
+                future = executor.submit(run_lmcleaner_job, epoch_name, epoch_step, k)
             else:
                 _, method = job
-                future = executor.submit(run_other_method_job, gpu, method)
+                future = executor.submit(run_other_method_job, method)
 
             futures[future] = job
 

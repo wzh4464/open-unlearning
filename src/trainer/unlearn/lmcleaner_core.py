@@ -327,10 +327,16 @@ def hvp_ggn(
     if params is None:
         params = [p for p in model.parameters() if p.requires_grad]
 
-    # Ensure v is on the same device as model parameters (A40 GPU fix)
-    device = params[0].device if params else v.device
-    if v.device != device:
-        v = v.to(device)
+    # Ensure v matches both device and dtype of model parameters (A40 GPU fix)
+    ref = params[0] if params else v
+    if v.device != ref.device or v.dtype != ref.dtype:
+        v = v.to(ref)
+
+    # Ensure all batch_data tensors are on the same device as the model
+    if isinstance(batch_data, dict):
+        for k, val in batch_data.items():
+            if isinstance(val, torch.Tensor) and val.device != ref.device:
+                batch_data[k] = val.to(ref.device)
 
     # 分解v为参数形状
     v_list = _unflatten_like(v, params)

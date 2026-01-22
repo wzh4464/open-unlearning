@@ -4,9 +4,11 @@
 
 set -e
 
-MODEL_PATH="/app/saves/finetune/tofu_finetune_gpt2"
-LOG_DIR="/app/saves/train_logs/tofu_finetune_gpt2"
-OUTPUT_BASE="saves/unlearn"
+# Use environment variables for portability
+SAVES_DIR="${SAVES_DIR:-./saves}"
+MODEL_PATH="${MODEL_PATH:-${SAVES_DIR}/finetune/tofu_finetune_gpt2}"
+LOG_DIR="${LOG_DIR:-${SAVES_DIR}/train_logs/tofu_finetune_gpt2}"
+OUTPUT_BASE="${OUTPUT_BASE:-${SAVES_DIR}/unlearn}"
 
 # K values to test
 K_VALUES=(10 50 100 250 500)

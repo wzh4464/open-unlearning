@@ -19,8 +19,8 @@ K_VALUES=(10 50 100 250 500)
 # Other unlearning methods to test
 OTHER_METHODS=(GradAscent GradDiff NPO SimNPO)
 
-# GPU assignment
-NUM_GPUS=4
+# GPU assignment - use environment variable or default to 4
+NUM_GPUS=${NUM_GPUS:-4}
 
 # Create output directory
 mkdir -p "$BASE_OUTPUT_DIR"
@@ -121,7 +121,7 @@ job_idx=0
 while [ $job_idx -lt ${#JOBS[@]} ]; do
     pids=()
 
-    for gpu in 0 1 2 3; do
+    for gpu in $(seq 0 $((NUM_GPUS - 1))); do
         if [ $job_idx -lt ${#JOBS[@]} ]; then
             job=${JOBS[$job_idx]}
             IFS=':' read -r method epoch_step epoch_name k_value task_name <<< "$job"

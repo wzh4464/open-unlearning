@@ -5,8 +5,10 @@
 
 set -e
 
-MODEL_PATH="/app/saves/finetune/tofu_finetune_gpt2"
-LOG_DIR="/app/saves/train_logs/tofu_finetune_gpt2"
+# Use environment variables for portability
+SAVES_DIR="${SAVES_DIR:-./saves}"
+MODEL_PATH="${MODEL_PATH:-${SAVES_DIR}/finetune/tofu_finetune_gpt2}"
+LOG_DIR="${LOG_DIR:-${SAVES_DIR}/train_logs/tofu_finetune_gpt2}"
 
 echo "Starting reduced LMCleaner runs at $(date)"
 
