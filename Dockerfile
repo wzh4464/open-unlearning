@@ -2,15 +2,16 @@ FROM pytorch/pytorch:2.9.1-cuda12.6-cudnn9-devel
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System dependencies + ensure conda is in PATH for all shells
+# System dependencies + Slurm + ensure conda is in PATH for all shells
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget unzip git tmux curl openssh-client openssh-server \
-    nvtop htop && \
-    echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/profile.d/conda.sh && \
-    echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/bash.bashrc && \
-    ln -sf /opt/conda/bin/python /usr/bin/python && \
-    ln -sf /opt/conda/bin/python /usr/bin/python3 && \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+    nvtop htop \
+    slurm-wlm slurm-client munge tini \
+    && echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/profile.d/conda.sh \
+    && echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/bash.bashrc \
+    && ln -sf /opt/conda/bin/python /usr/bin/python \
+    && ln -sf /opt/conda/bin/python /usr/bin/python3 \
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Install Node.js v20.x
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
@@ -23,6 +24,12 @@ RUN npm install -g @google/gemini-cli @anthropic-ai/claude-code
 
 # Install Python dev tools
 RUN pip install --no-cache-dir ruff pytest uv
+
+# Create Slurm directories (configs will be copied later)
+RUN mkdir -p /etc/slurm /var/spool/slurmctld /var/spool/slurmd \
+    /var/log/slurm /run/munge && \
+    chown -R root:root /etc/slurm && \
+    chmod 755 /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
 
 WORKDIR /app
 
@@ -48,8 +55,16 @@ RUN pip install --no-cache-dir \
 # Build flash-attn from source (needs torch visible)
 RUN pip install flash-attn==2.8.3 --no-build-isolation
 
-# Copy code
+# Copy code (including configs/slurm/)
 COPY . .
+
+# === Slurm configuration (after COPY to allow config changes without cache invalidation) ===
+RUN cp /app/configs/slurm/slurm.conf /etc/slurm/slurm.conf && \
+    cp /app/configs/slurm/cgroup.conf /etc/slurm/cgroup.conf && \
+    cp /app/configs/slurm/gres.conf /etc/slurm/gres.conf && \
+    cp /app/configs/slurm/munge.key /etc/munge/munge.key && \
+    chmod 400 /etc/munge/munge.key && \
+    chown munge:munge /etc/munge/munge.key
 
 # Environment variables
 ENV IN_DOCKER=1
@@ -75,5 +90,5 @@ RUN echo '[ -d /workspace/dotfiles ] && ln -sf /workspace/dotfiles/tmux/tmux.con
 COPY scripts/docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
 CMD ["sleep", "infinity"]

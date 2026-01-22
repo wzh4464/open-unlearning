@@ -81,6 +81,39 @@ fi
 [ -L /app/saves ] && [ "$(readlink /app/saves)" = "/workspace/saves" ] || ln -sfn /workspace/saves /app/saves
 [ -L /app/data ] && [ "$(readlink /app/data)" = "/workspace/data" ] || ln -sfn /workspace/data /app/data
 
+# === Slurm setup ===
+echo "Setting up Slurm..."
+
+# Create required directories with proper permissions
+mkdir -p /run/munge /var/log/munge /var/lib/munge /var/log/slurm \
+         /var/spool/slurmctld /var/spool/slurmd
+chown -R munge:munge /run/munge /var/log/munge /var/lib/munge /etc/munge
+chmod 700 /run/munge /var/log/munge /var/lib/munge
+chmod 755 /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
+
+# Auto-detect system resources and update slurm.conf
+CPUS=$(nproc)
+# Get total memory in MB, leave ~5% for system overhead (minimum 8GB)
+TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+TOTAL_MEM_MB=$(( TOTAL_MEM_KB / 1024 ))
+HEADROOM=$(( TOTAL_MEM_MB * 5 / 100 ))
+[ $HEADROOM -lt 8192 ] && HEADROOM=8192
+REAL_MEM=$(( TOTAL_MEM_MB - HEADROOM ))
+
+# Detect GPUs
+if command -v nvidia-smi &> /dev/null; then
+    GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
+else
+    GPU_COUNT=0
+fi
+
+echo "Detected: CPUs=$CPUS, RealMemory=${REAL_MEM}MB, GPUs=$GPU_COUNT"
+
+# Update slurm.conf with detected resources
+sed -i "s/NodeName=localhost CPUs=[0-9]* RealMemory=[0-9]* Gres=gpu:[0-9]*/NodeName=localhost CPUs=$CPUS RealMemory=$REAL_MEM Gres=gpu:$GPU_COUNT/" /etc/slurm/slurm.conf
+
+echo "Slurm configuration updated"
+
 # === First-run initialization ===
 if [ ! -f /workspace/.initialized ]; then
     echo "=== First run: downloading evaluation data ==="
@@ -98,6 +131,23 @@ if [ ! -f /workspace/.initialized ]; then
     touch /workspace/.initialized
     echo "=== Initialization complete ==="
 fi
+
+# Start Slurm services
+echo "Starting munge..."
+# Use --force to bypass ownership check issues in containers
+/usr/sbin/munged --force || echo "Warning: munged failed to start"
+sleep 1
+
+echo "Starting slurmctld..."
+/usr/sbin/slurmctld
+sleep 1
+
+echo "Starting slurmd..."
+/usr/sbin/slurmd
+sleep 1
+
+echo "Slurm services started. Checking status..."
+sinfo || echo "Warning: sinfo failed, Slurm may need more time to initialize"
 
 # If no command provided (RunPod sometimes overrides CMD), keep container alive
 if [ $# -eq 0 ]; then
