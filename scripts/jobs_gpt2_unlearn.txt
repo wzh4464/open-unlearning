@@ -1,0 +1,31 @@
+# LMCleaner jobs: epoch x K = 5 x 5 = 25 jobs
+LMCleanerBatch,epoch1,125,10
+LMCleanerBatch,epoch1,125,50
+LMCleanerBatch,epoch1,125,100
+LMCleanerBatch,epoch1,125,250
+LMCleanerBatch,epoch1,125,500
+LMCleanerBatch,epoch2,250,10
+LMCleanerBatch,epoch2,250,50
+LMCleanerBatch,epoch2,250,100
+LMCleanerBatch,epoch2,250,250
+LMCleanerBatch,epoch2,250,500
+LMCleanerBatch,epoch3,375,10
+LMCleanerBatch,epoch3,375,50
+LMCleanerBatch,epoch3,375,100
+LMCleanerBatch,epoch3,375,250
+LMCleanerBatch,epoch3,375,500
+LMCleanerBatch,epoch4,500,10
+LMCleanerBatch,epoch4,500,50
+LMCleanerBatch,epoch4,500,100
+LMCleanerBatch,epoch4,500,250
+LMCleanerBatch,epoch4,500,500
+LMCleanerBatch,epoch5,625,10
+LMCleanerBatch,epoch5,625,50
+LMCleanerBatch,epoch5,625,100
+LMCleanerBatch,epoch5,625,250
+LMCleanerBatch,epoch5,625,500
+# Other methods (using final model)
+GradAscent,final,625,0
+GradDiff,final,625,0
+NPO,final,625,0
+SimNPO,final,625,0
