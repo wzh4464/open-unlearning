@@ -1201,47 +1201,44 @@ def compute_correction(
                     "Falling back to current parameters θ[τ] for HVP."
                 )
             else:
-                # Phase B: Verify tail u vectors are available [end+1, tau-1]
-                _tail_ok = True
-                for t in range(end + 1, tau):
-                    u_t = _load_u(t)
-                    if u_t is None:
-                        _tail_ok = False
-                        break
-                    del u_t
-
-                if _tail_ok:
-                    _do_historical = True
-                    logger.debug(
-                        f"Historical parameter reconstruction enabled for steps [{start}, {end}] "
-                        f"(loaded {len(u_vectors)} u vectors for propagation)"
-                    )
-                else:
-                    u_vectors.clear()
-                    logger.warning(
-                        "Cannot reconstruct historical parameters: u[t] vectors not available "
-                        f"for tail steps in [{end + 1}, {tau - 1}]. "
-                        "Falling back to current parameters θ[τ] for HVP."
-                    )
+                # Phase B: Compute θ[start] = θ[τ] - Σ_{t=start}^{τ-1} u[t]
+                # Load tail u vectors [end+1, tau-1] in a single pass:
+                # verify availability and accumulate directly into theta_current.
+                _do_historical = True
+                logger.debug(
+                    f"Historical parameter reconstruction enabled for steps [{start}, {end}] "
+                    f"(loaded {len(u_vectors)} u vectors for propagation)"
+                )
     elif K_used > 0 and not use_historical_params:
         logger.debug("Historical parameter reconstruction disabled by user")
 
-    # 如果使用历史参数 (legacy path)，先保存当前参数 θ[τ] 并计算 θ[start]
-    # θ[start] = θ[τ] - Σ_{t=start}^{τ-1} u[t]
-    # Accumulate directly into theta_current to avoid keeping a separate _tail_sum tensor
+    # Build θ[start] for legacy path: single-pass tail accumulation
     if _do_historical and not _external_provider:
         theta_tau = _get_flat_params(model).clone()
         theta_current = theta_tau.clone()
-        # Subtract window u vectors
+        # Subtract window u vectors (already in memory)
         for t in range(start, end + 1):
             theta_current -= u_vectors[t]
-        # Subtract tail u vectors in-place (streaming, no intermediate tensor)
+        # Subtract tail u vectors in a single streaming pass (no double-load)
         for t in range(end + 1, tau):
             u_t = _load_u(t)
-            if u_t is not None:
-                theta_current -= u_t.to(model_device)
-                del u_t
-        _set_flat_params(model, theta_current)
+            if u_t is None:
+                # Tail incomplete — abort historical reconstruction
+                _do_historical = False
+                u_vectors.clear()
+                _set_flat_params(model, theta_tau)
+                del theta_tau, theta_current
+                logger.warning(
+                    "Cannot reconstruct historical parameters: u[t] not available "
+                    f"for tail step {t} in [{end + 1}, {tau - 1}]. "
+                    "Falling back to current parameters θ[τ] for HVP."
+                )
+                break
+            theta_current -= u_t.to(model_device)
+            del u_t
+        else:
+            # All tail u vectors loaded successfully
+            _set_flat_params(model, theta_current)
 
     # Helper: advance θ[s] -> θ[s+1] via theta_current += u[s] (legacy path)
     def _advance_theta(s: int) -> None:
