@@ -5,10 +5,10 @@
 # ============================================
 # Model Configuration
 # ============================================
-MODEL_NAME="Llama-2-7b-hf"
-MODEL_SHORT="llama2_7b"
-# Base model path (ModelScope download)
-BASE_MODEL_PATH="${HOME}/.cache/modelscope/hub/models/shakechen/Llama-2-7b-hf"
+MODEL_NAME="Llama-3.2-3B-Instruct"
+MODEL_SHORT="llama32_3b"
+# Base model: use HuggingFace model ID (auto-downloaded)
+BASE_MODEL_PATH="unsloth/Llama-3.2-3B-Instruct"
 
 # ============================================
 # Path Configuration
@@ -16,6 +16,8 @@ BASE_MODEL_PATH="${HOME}/.cache/modelscope/hub/models/shakechen/Llama-2-7b-hf"
 FINETUNE_DIR="saves/finetune/${MODEL_SHORT}_tofu_1epoch"
 RETRAIN_DIR="saves/finetune/${MODEL_SHORT}_tofu_retrain"
 TRAINING_LOG_DIR="saves/train_logs/${MODEL_SHORT}_tofu_1epoch"
+# For HF models, tokenizer path = model name (not local dir)
+TOKENIZER_PATH="${BASE_MODEL_PATH}"
 UNLEARN_BASE_DIR="saves/unlearn"
 RESULTS_DIR="saves/results/expA"
 
@@ -23,9 +25,7 @@ RESULTS_DIR="saves/results/expA"
 # Training Configuration
 # ============================================
 NUM_EPOCHS=1
-# H200 has 143GB VRAM; 7B bf16 + grad_ckpt allows batch_size=8 comfortably.
-# Effective batch = 8 * 8 = 64 -> steps = ceil(4000/64) = 63
-# This reduces u[t] storage from 250 * 6.75GB = 1.7TB to 63 * 6.75GB = 425GB
+# 3B bf16 u[t] ~6GB/step. batch=8*accum=8=64 -> 63 steps -> ~378GB total
 PER_DEVICE_BATCH_SIZE=8
 GRADIENT_ACCUMULATION_STEPS=8
 STEPS_PER_EPOCH=63  # 4000 samples / effective_batch_64

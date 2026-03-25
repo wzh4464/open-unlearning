@@ -11,10 +11,9 @@ echo "ExpA Step 1: Finetune ${MODEL_NAME} on TOFU (1 epoch)"
 echo "=============================================="
 print_config
 
-# Verify base model exists
-if [ ! -d "${BASE_MODEL_PATH}" ]; then
+# Verify base model exists (skip check for HF model IDs)
+if [[ "${BASE_MODEL_PATH}" != */* ]] && [ ! -d "${BASE_MODEL_PATH}" ]; then
     echo "ERROR: Base model not found at ${BASE_MODEL_PATH}"
-    echo "Run: modelscope download --model shakechen/Llama-2-7b-hf"
     exit 1
 fi
 

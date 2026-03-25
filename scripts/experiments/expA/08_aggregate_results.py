@@ -21,8 +21,8 @@ def load_json(path):
 def find_methods(seed=0):
     """Build method name -> model directory mapping."""
     unlearn_dir = Path("saves/unlearn")
-    finetune_dir = Path("saves/finetune/llama2_7b_tofu_1epoch")
-    retrain_dir = Path("saves/finetune/llama2_7b_tofu_retrain")
+    finetune_dir = Path("saves/finetune/llama32_3b_tofu_1epoch")
+    retrain_dir = Path("saves/finetune/llama32_3b_tofu_retrain")
 
     methods = {}
     methods["Original"] = finetune_dir
