@@ -231,12 +231,14 @@ class FinetuneTrainer(Trainer):
                             update = -(grad + weight_decay * p_detached).reshape(-1)
                         else:
                             update = (-grad).reshape(-1)
-                        parts.append((lr * update).to(torch.bfloat16).cpu())
+                        # Keep on-device; single transfer after concatenation
+                        parts.append(lr * update)
                     else:
                         # Parameter has no gradient; its update is zero
-                        parts.append(torch.zeros(p.numel(), dtype=torch.bfloat16))
+                        parts.append(torch.zeros(p.numel(), device=p.device, dtype=p.dtype))
             if parts:
-                self.training_logger._pending_u = torch.cat(parts)
+                # Single GPU→CPU transfer and dtype conversion for the full vector
+                self.training_logger._pending_u = torch.cat(parts).to(torch.bfloat16).cpu()
 
         self._sgd_hook_handle = self.optimizer.register_step_pre_hook(
             _capture_u_from_grad
