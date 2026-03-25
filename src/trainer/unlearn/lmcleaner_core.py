@@ -453,7 +453,7 @@ def _set_flat_params(model: nn.Module, flat_params: torch.Tensor) -> None:
 
 def _get_flat_params(model: nn.Module) -> torch.Tensor:
     """Get model parameters as a flattened vector."""
-    return torch.cat([p.view(-1) for p in model.parameters() if p.requires_grad])
+    return torch.cat([p.reshape(-1) for p in model.parameters() if p.requires_grad])
 
 
 def hvp_apply(
@@ -724,44 +724,71 @@ def compute_correction(
 
     # 首先判断是否能使用历史参数
     use_historical_params = False
-    # 收集 start..tau-1 的 u 向量，检查是否全部可用
+    # 只收集传播窗口 [start, end] 内的 u 向量 (用于逐步推进 θ[s])
     u_vectors: Dict[int, torch.Tensor] = {}
 
-    if K_used > 0:
-        # 尝试收集从 start 到 tau-1 的所有 u 向量
-        _missing_u = False
-        for t in range(start, tau):
-            u_t = None
-            if use_lazy_loading and lazy_loader is not None:
-                rec_dict = lazy_loader.load_single_step(t, include_tensors=True)
-                if rec_dict is not None:
-                    u_t = rec_dict.get("u")
-                    del rec_dict
-            elif step_log is not None:
-                srec_tmp = step_log[t]
-                if srec_tmp is not None:
-                    u_t = srec_tmp.u
+    # 辅助函数: 加载单步的 u 向量
+    def _load_u(t: int) -> Optional[torch.Tensor]:
+        if use_lazy_loading and lazy_loader is not None:
+            rec_dict = lazy_loader.load_single_step(t, include_tensors=True)
+            if rec_dict is not None:
+                u_val = rec_dict.get("u")
+                del rec_dict
+                return u_val
+        elif step_log is not None:
+            srec_tmp = step_log[t]
+            if srec_tmp is not None:
+                return srec_tmp.u
+        return None
 
+    if K_used > 0:
+        # Phase A: 收集传播窗口 [start, end] 内的 u 向量
+        _missing_u = False
+        for t in range(start, end + 1):
+            u_t = _load_u(t)
             if u_t is not None:
-                # 保持 u 向量在模型参数所在的 device 上，避免 device 不匹配
                 u_vectors[t] = u_t.to(model_device)
             else:
                 _missing_u = True
                 break
 
-        if not _missing_u and len(u_vectors) == (tau - start):
-            use_historical_params = True
-            logger.info(
-                f"Historical parameter reconstruction enabled for steps [{start}, {end}] "
-                f"(loaded {len(u_vectors)} u vectors)"
-            )
-        else:
+        if _missing_u:
             u_vectors.clear()
             logger.warning(
                 "Cannot reconstruct historical parameters: u[t] vectors not available "
-                f"for all steps in [{start}, {tau - 1}]. "
+                f"for all steps in [{start}, {end}]. "
                 "Falling back to current parameters θ[τ] for HVP."
             )
+        else:
+            # Phase B: 计算 θ[start] = θ[τ] - Σ_{t=start}^{τ-1} u[t]
+            # 对于窗口之后 [end+1, tau-1] 的 u 向量，流式累加后丢弃，不存储
+            _tail_ok = True
+            _tail_sum = torch.zeros(1, device=model_device)  # 延迟初始化
+            for t in range(end + 1, tau):
+                u_t = _load_u(t)
+                if u_t is None:
+                    _tail_ok = False
+                    break
+                u_t = u_t.to(model_device)
+                if _tail_sum.numel() == 1:
+                    _tail_sum = u_t.clone()
+                else:
+                    _tail_sum += u_t
+                del u_t
+
+            if _tail_ok:
+                use_historical_params = True
+                logger.info(
+                    f"Historical parameter reconstruction enabled for steps [{start}, {end}] "
+                    f"(loaded {len(u_vectors)} u vectors for propagation)"
+                )
+            else:
+                u_vectors.clear()
+                logger.warning(
+                    "Cannot reconstruct historical parameters: u[t] vectors not available "
+                    f"for tail steps in [{end + 1}, {tau - 1}]. "
+                    "Falling back to current parameters θ[τ] for HVP."
+                )
 
     # 如果使用历史参数，先保存当前参数 θ[τ] 并计算 θ[start]
     # 维护 theta_current 作为 flat 向量，避免每步重复 get/set
@@ -769,10 +796,13 @@ def compute_correction(
     theta_current: Optional[torch.Tensor] = None
     if use_historical_params:
         theta_tau = _get_flat_params(model).clone()
-        # 计算 θ[start] = θ[τ] - Σ_{t=start}^{τ-1} u[t]
+        # θ[start] = θ[τ] - Σ_{t=start}^{end} u[t] - Σ_{t=end+1}^{τ-1} u[t]
         theta_current = theta_tau.clone()
-        for t in range(start, tau):
+        for t in range(start, end + 1):
             theta_current -= u_vectors[t]
+        if _tail_sum.numel() > 1:
+            theta_current -= _tail_sum
+        del _tail_sum
         _set_flat_params(model, theta_current)
 
     # Helper: advance θ[s] -> θ[s+1] via theta_current += u[s]
