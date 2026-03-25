@@ -218,9 +218,10 @@ class EfficiencyMetrics:
     # I/O metrics
     checkpoint_save_time_seconds: float = 0.0
 
-    # LMCleaner-specific metrics (populated from audit records)
+    # LMCleaner-specific metrics (populated from audit records + trainer attrs)
     lmcleaner_total_hvp_calls: int = 0
     lmcleaner_num_forget_steps: int = 0
+    lmcleaner_num_affected_batches: int = 0
     lmcleaner_K_configured: int = 0
     lmcleaner_K_used_mean: float = 0.0
     lmcleaner_K_used_max: int = 0
@@ -228,6 +229,8 @@ class EfficiencyMetrics:
     lmcleaner_correction_norm_max: float = 0.0
     lmcleaner_per_forget_step_time_mean_ms: float = 0.0
     lmcleaner_per_forget_step_time_std_ms: float = 0.0
+    lmcleaner_unlearning_total_time_seconds: float = 0.0
+    lmcleaner_unlearning_peak_gpu_mb: float = 0.0
     lmcleaner_train_logs_size_gb: float = 0.0
 
     def to_dict(self):
@@ -621,7 +624,23 @@ class EfficiencyTracker(TrainerCallback):
 
 
     def _populate_lmcleaner_metrics(self, metrics: EfficiencyMetrics, trainer):
-        """Populate LMCleaner-specific fields from trainer's audit records."""
+        """Populate LMCleaner-specific fields from trainer's audit records and attrs."""
+        # Unlearning-phase metrics (tracked directly by LMCleaner._apply_unlearning)
+        metrics.lmcleaner_unlearning_total_time_seconds = getattr(
+            trainer, "unlearning_total_time_seconds", 0.0
+        )
+        metrics.lmcleaner_unlearning_peak_gpu_mb = getattr(
+            trainer, "unlearning_peak_gpu_mb", 0.0
+        )
+        metrics.lmcleaner_num_affected_batches = getattr(
+            trainer, "num_affected_batches", 0
+        )
+
+        # Also override the top-level peak_gpu if unlearning phase was higher
+        if metrics.lmcleaner_unlearning_peak_gpu_mb > metrics.peak_gpu_memory_mb:
+            metrics.peak_gpu_memory_mb = metrics.lmcleaner_unlearning_peak_gpu_mb
+
+        # Audit record aggregation
         audit_records = getattr(trainer, "audit_records", None)
         if not audit_records:
             return
@@ -654,12 +673,14 @@ class EfficiencyTracker(TrainerCallback):
             metrics.lmcleaner_per_forget_step_time_std_ms = float(np.std(step_times))
 
         # Measure train_logs directory size
-        train_log_dir = getattr(trainer, "train_log_dir", None)
+        train_log_dir = getattr(trainer, "training_log_dir", None)
         if train_log_dir is None:
             train_log_dir = getattr(trainer, "log_dir", None)
         if train_log_dir and Path(train_log_dir).exists():
             total_bytes = sum(
-                f.stat().st_size for f in Path(train_log_dir).rglob("*") if f.is_file()
+                f.stat().st_size
+                for f in Path(train_log_dir).rglob("*")
+                if f.is_file()
             )
             metrics.lmcleaner_train_logs_size_gb = total_bytes / (1024**3)
 
