@@ -1198,20 +1198,13 @@ def compute_correction(
                     "Falling back to current parameters θ[τ] for HVP."
                 )
             else:
-                # Phase B: 计算 θ[start] = θ[τ] - Σ_{t=start}^{τ-1} u[t]
-                # 对于窗口之后 [end+1, tau-1] 的 u 向量，流式累加后丢弃，不存储
+                # Phase B: Verify tail u vectors are available [end+1, tau-1]
                 _tail_ok = True
-                _tail_sum: Optional[torch.Tensor] = None
                 for t in range(end + 1, tau):
                     u_t = _load_u(t)
                     if u_t is None:
                         _tail_ok = False
                         break
-                    u_t = u_t.to(model_device)
-                    if _tail_sum is None:
-                        _tail_sum = u_t.clone()
-                    else:
-                        _tail_sum += u_t
                     del u_t
 
                 if _tail_ok:
@@ -1231,16 +1224,20 @@ def compute_correction(
         logger.debug("Historical parameter reconstruction disabled by user")
 
     # 如果使用历史参数 (legacy path)，先保存当前参数 θ[τ] 并计算 θ[start]
-    # 维护 theta_current 作为 flat 向量，避免每步重复 get/set
+    # θ[start] = θ[τ] - Σ_{t=start}^{τ-1} u[t]
+    # Accumulate directly into theta_current to avoid keeping a separate _tail_sum tensor
     if _do_historical and not _external_provider:
         theta_tau = _get_flat_params(model).clone()
-        # θ[start] = θ[τ] - Σ_{t=start}^{end} u[t] - Σ_{t=end+1}^{τ-1} u[t]
         theta_current = theta_tau.clone()
+        # Subtract window u vectors
         for t in range(start, end + 1):
             theta_current -= u_vectors[t]
-        if _tail_sum is not None:
-            theta_current -= _tail_sum
-        del _tail_sum
+        # Subtract tail u vectors in-place (streaming, no intermediate tensor)
+        for t in range(end + 1, tau):
+            u_t = _load_u(t)
+            if u_t is not None:
+                theta_current -= u_t.to(model_device)
+                del u_t
         _set_flat_params(model, theta_current)
 
     # Helper: advance θ[s] -> θ[s+1] via theta_current += u[s] (legacy path)
