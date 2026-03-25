@@ -93,6 +93,10 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # ! 显存紧张时设为 False 退化为在 θ[τ] 处近似计算
         # ! 详见 docs/historical_params_hvp.md
         use_historical_params: bool = True,
+        # Multi forget-step execution strategy
+        # "sum_then_apply": accumulate all corrections, apply once (order-invariant)
+        # "sequential_apply": apply each correction immediately (legacy, order-dependent)
+        apply_mode: str = "sum_then_apply",
         *args,
         **kwargs,
     ):
@@ -117,6 +121,9 @@ class LMCleanerBatchLevel(UnlearnTrainer):
 
         # 历史参数重建开关
         self.use_historical_params = use_historical_params
+
+        # Multi forget-step execution strategy
+        self.apply_mode = apply_mode
 
         # HVP配置
         self.hvp_config = HVPConfig(
@@ -152,7 +159,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         logger.info(
             f"LMCleanerBatchLevel initialized: K={K}, hessian_mode={hessian_mode}, "
             f"damping={damping}, epsilon={epsilon}, delta={delta}, "
-            f"use_historical_params={use_historical_params}"
+            f"use_historical_params={use_historical_params}, apply_mode={apply_mode}"
         )
 
         # 立即应用遗忘(如果设置)
@@ -309,6 +316,16 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                 max_cache_entries=4,
             )
 
+        # Accumulator for sum-then-apply mode
+        v_total = None
+        use_sum_then_apply = self.apply_mode == "sum_then_apply"
+
+        if use_sum_then_apply:
+            logger.info(
+                "Using sum-then-apply mode: corrections accumulated before applying "
+                "(order-invariant)"
+            )
+
         for i, tz in enumerate(forget_steps):
             logger.info(f"Processing forget step {i + 1}/{len(forget_steps)}: tz={tz}")
 
@@ -345,25 +362,38 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                     batch_reconstructor=self.batch_reconstructor,
                     epsilon=self.epsilon,
                     delta=self.delta,
-                    lazy_loader=self.lazy_loader,  # 传入 lazy_loader 用于按需加载
-                    initial_record=initial_record,  # 传入初始记录
+                    lazy_loader=self.lazy_loader,
+                    initial_record=initial_record,
                     use_historical_params=self.use_historical_params,
                     historical_param_provider=historical_param_provider,
                 )
 
-                # Phase 3: 应用校正
-                apply_correction(v, params)
                 self.audit_records.append(audit)
 
-                logger.info(
-                    f"Applied correction for step {tz}: "
-                    f"v_norm={audit.v_norm:.6f}, K_used={audit.K_used}, hvp_calls={audit.hvp_calls}"
-                    + (
-                        f", noise_σ={audit.noise_sigma:.6f}"
-                        if audit.noise_injected
-                        else ""
+                if use_sum_then_apply:
+                    # Accumulate correction (streaming sum to save memory)
+                    if v_total is None:
+                        v_total = v.clone()
+                    else:
+                        v_total.add_(v)
+                    logger.info(
+                        f"Accumulated correction for step {tz}: "
+                        f"v_norm={audit.v_norm:.6f}, K_used={audit.K_used}, "
+                        f"hvp_calls={audit.hvp_calls}"
                     )
-                )
+                else:
+                    # Legacy sequential apply
+                    apply_correction(v, params)
+                    logger.info(
+                        f"Applied correction for step {tz}: "
+                        f"v_norm={audit.v_norm:.6f}, K_used={audit.K_used}, "
+                        f"hvp_calls={audit.hvp_calls}"
+                        + (
+                            f", noise_σ={audit.noise_sigma:.6f}"
+                            if audit.noise_injected
+                            else ""
+                        )
+                    )
 
                 # 清理内存
                 del initial_record, v
@@ -372,11 +402,22 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                     torch.cuda.empty_cache()
 
             except Exception as e:
-                logger.error(f"Failed to apply correction for step {tz}: {e}")
+                logger.error(f"Failed to compute correction for step {tz}: {e}")
                 import traceback
 
                 traceback.print_exc()
                 continue
+
+        # Apply accumulated corrections (sum-then-apply mode)
+        if use_sum_then_apply and v_total is not None:
+            apply_correction(v_total, params)
+            aggregate_v_norm = float(v_total.norm().item())
+            logger.info(
+                f"Applied aggregated correction: v_total_norm={aggregate_v_norm:.6f}, "
+                f"num_forget_steps={len(forget_steps)}, "
+                f"apply_mode=sum_then_apply"
+            )
+            del v_total
 
         if historical_param_provider is not None:
             historical_param_provider.cleanup()

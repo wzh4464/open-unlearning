@@ -36,6 +36,11 @@ method_args:
   # 是否在初始化时立即应用遗忘
   apply_immediately: false
 
+  # Multi forget-step execution strategy
+  # "sum_then_apply": accumulate all corrections, apply once (order-invariant, default)
+  # "sequential_apply": apply each correction immediately (legacy, order-dependent)
+  apply_mode: sum_then_apply
+
   # 审计日志输出目录 (可选)
   audit_dir: ${paths.output_dir}/audit
 

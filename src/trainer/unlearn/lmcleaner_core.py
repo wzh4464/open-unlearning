@@ -1312,11 +1312,12 @@ def compute_correction(
             hvp = hvp_apply(v, srec, cfg, model, loss_fn, batch_reconstructor)
 
         eta = srec.eta
-        v = v - eta * hvp
 
-        # 添加阻尼: v ← v - η[s] * λ * v (实现添加，论文未包含)
+        # Paper Algorithm 1: hv ← Hv + λ·v, then v ← v - η·hv
+        # Damping is applied to v BEFORE the update (not after)
         if cfg.damping > 0:
-            v = v - eta * cfg.damping * v
+            hvp = hvp + cfg.damping * v
+        v = v - eta * hvp
 
         hvp_calls += 1
 
