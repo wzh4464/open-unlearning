@@ -115,6 +115,10 @@ def load_trainer(
                 save_at_epoch_end=logger_cfg.get("save_at_epoch_end", False),
                 # Memory management: sync_mode saves every step and clears memory immediately
                 sync_mode=logger_cfg.get("sync_mode", False),
+                # Sparse checkpoints for historical parameter reconstruction
+                save_sparse_checkpoints=logger_cfg.get("save_sparse_checkpoints", True),
+                checkpoint_stride=logger_cfg.get("checkpoint_stride", 50),
+                checkpoint_dtype=logger_cfg.get("checkpoint_dtype", "bf16"),
             )
             logger.info(f"TrainingLogger initialized: {training_logger.log_dir}")
             if logger_cfg.get("sync_mode", False):
