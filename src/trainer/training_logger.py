@@ -873,35 +873,32 @@ class TrainingLogger:
             logger.debug(f"No new records to save at step {step_id}")
             return
 
-        # 准备可序列化的记录
-        serializable_records = []
+        # Save each record: u[t] as torch tensor file (fast), metadata as JSON-in-pickle
+        u_dir = self.log_dir / "u_vectors"
+        u_dir.mkdir(exist_ok=True)
+
         for rec in new_records:
-            rec_dict = {
-                "step_id": rec.step_id,
+            sid = rec.step_id
+            # Save u[t] as standalone .pt file (torch.save is much faster than pickle for large tensors)
+            if rec.u is not None:
+                u_path = u_dir / f"u_{sid:06d}.pt"
+                torch.save(rec.u.cpu(), u_path)
+
+            # Save lightweight metadata as pickle (tiny, fast)
+            meta_dict = {
+                "step_id": sid,
                 "eta": rec.eta,
                 "batch_id": rec.batch_id,
-                "u": rec.u.cpu() if rec.u is not None else None,
                 "gbar": rec.gbar.cpu() if rec.gbar is not None else None,
                 "diag_H": rec.diag_H.cpu() if rec.diag_H is not None else None,
             }
-            serializable_records.append(rec_dict)
+            meta_path = self.log_dir / f"step_meta_{sid:06d}.pkl"
+            with open(meta_path, "wb") as f:
+                pickle.dump(meta_dict, f)
 
-        # 使用 chunk 文件名（增量保存）
-        chunk_file = self.log_dir / f"step_records_chunk_{step_id}.pkl"
-
-        # 异步写入或同步写入
-        if self._async_write:
-            self.start_async_writer()
-            self._write_queue.put((chunk_file, serializable_records))
-            logger.info(
-                f"Queued {len(new_records)} records for async write at step {step_id}"
-            )
-        else:
-            with open(chunk_file, "wb") as f:
-                pickle.dump(serializable_records, f)
-            logger.info(
-                f"Saved {len(new_records)} records at step {step_id} to {self.log_dir}"
-            )
+        logger.info(
+            f"Saved {len(new_records)} records (torch.save) at step {step_id}"
+        )
 
         # 更新已保存的最后一个 step_id
         self._last_saved_step_id = new_records[-1].step_id
