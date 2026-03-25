@@ -49,6 +49,11 @@ method_args:
   # ! 详见 docs/historical_params_hvp.md
   use_historical_params: true
 
+  # Multi forget-step execution strategy
+  # "sum_then_apply": accumulate all corrections, apply once (order-invariant, default)
+  # "sequential_apply": apply each correction immediately (legacy, order-dependent)
+  apply_mode: sum_then_apply
+
   # 审计日志输出目录 (可选)
   # 记录每次遗忘操作的详细信息
   audit_dir: ${paths.output_dir}/audit

@@ -85,6 +85,8 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         # Phase 4: 隐私噪声参数
         epsilon: float = 0.0,  # 默认不注入噪声
         delta: float = 1e-5,
+        # Multi forget-step execution strategy
+        apply_mode: str = "sum_then_apply",
         *args,
         **kwargs,
     ):
@@ -100,6 +102,9 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         # Phase 4: 隐私参数
         self.epsilon = epsilon
         self.delta = delta
+
+        # Multi forget-step execution strategy
+        self.apply_mode = apply_mode
 
         # HVP配置
         self.hvp_config = HVPConfig(
@@ -240,12 +245,10 @@ class LMCleanerSampleLevel(UnlearnTrainer):
                     v, srec, self.hvp_config, self.model, None, self.batch_reconstructor
                 )
 
-            # v ← v - η[s] * hvp
-            v = v - srec.eta * hvp
-
-            # 添加阻尼: v ← v - η[s] * λ * v (实现添加，论文未包含)
+            # Paper Algorithm 1: hv ← Hv + λ·v, then v ← v - η·hv
             if self.damping > 0:
-                v = v - srec.eta * self.damping * v
+                hvp = hvp + self.damping * v
+            v = v - srec.eta * hvp
 
             hvp_calls += 1
 
@@ -332,7 +335,17 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         logger.info(f"Applying sample-level unlearning for {len(forget_steps)} samples")
         logger.info(f"Current step: {tau}, K: {self.K}")
 
-        # 对每个forget样本计算并应用校正
+        # Accumulator for sum-then-apply mode
+        v_total = None
+        use_sum_then_apply = self.apply_mode == "sum_then_apply"
+
+        if use_sum_then_apply:
+            logger.info(
+                "Using sum-then-apply mode: corrections accumulated before applying "
+                "(order-invariant)"
+            )
+
+        # 对每个forget样本计算校正
         for i, tz in enumerate(forget_steps):
             logger.info(
                 f"Processing forget sample {i + 1}/{len(forget_steps)}: tz={tz}"
@@ -342,21 +355,43 @@ class LMCleanerSampleLevel(UnlearnTrainer):
                 # 计算参数校正向量(样本级)
                 v, audit = self._compute_sample_correction(tz, tau)
 
-                # 应用校正
-                apply_correction(v, params)
-
                 # 记录审计信息
                 self.audit_records.append(audit)
 
-                logger.info(
-                    f"Applied correction for sample at step {tz}: "
-                    f"v_norm={audit['v_norm']:.6f}, "
-                    f"K_used={audit['K_used']}"
-                )
+                if use_sum_then_apply:
+                    # Accumulate correction (streaming sum)
+                    if v_total is None:
+                        v_total = v.clone()
+                    else:
+                        v_total.add_(v)
+                    logger.info(
+                        f"Accumulated correction for sample at step {tz}: "
+                        f"v_norm={audit['v_norm']:.6f}, "
+                        f"K_used={audit['K_used']}"
+                    )
+                else:
+                    # Legacy sequential apply
+                    apply_correction(v, params)
+                    logger.info(
+                        f"Applied correction for sample at step {tz}: "
+                        f"v_norm={audit['v_norm']:.6f}, "
+                        f"K_used={audit['K_used']}"
+                    )
 
             except Exception as e:
-                logger.error(f"Failed to apply correction for step {tz}: {e}")
+                logger.error(f"Failed to compute correction for step {tz}: {e}")
                 continue
+
+        # Apply accumulated corrections (sum-then-apply mode)
+        if use_sum_then_apply and v_total is not None:
+            apply_correction(v_total, params)
+            aggregate_v_norm = float(v_total.norm().item())
+            logger.info(
+                f"Applied aggregated correction: v_total_norm={aggregate_v_norm:.6f}, "
+                f"num_forget_steps={len(forget_steps)}, "
+                f"apply_mode=sum_then_apply"
+            )
+            del v_total
 
         # 保存审计日志
         if self.audit_dir:
