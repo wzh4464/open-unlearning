@@ -452,11 +452,16 @@ def _set_flat_params(model: nn.Module, flat_params: torch.Tensor) -> None:
             n = p.numel()
             p.copy_(flat_params[offset : offset + n].view_as(p))
             offset += n
+    if offset != flat_params.numel():
+        raise ValueError(
+            f"Flat params size mismatch: consumed {offset}, got {flat_params.numel()}"
+        )
 
 
+@torch.no_grad()
 def _get_flat_params(model: nn.Module) -> torch.Tensor:
-    """Get model parameters as a flattened vector."""
-    return torch.cat([p.reshape(-1) for p in model.parameters() if p.requires_grad])
+    """Get model parameters as a flattened, detached vector."""
+    return torch.cat([p.detach().reshape(-1) for p in model.parameters() if p.requires_grad])
 
 
 def hvp_apply(
@@ -792,7 +797,7 @@ def compute_correction(
 
             if _tail_ok:
                 _do_historical = True
-                logger.info(
+                logger.debug(
                     f"Historical parameter reconstruction enabled for steps [{start}, {end}] "
                     f"(loaded {len(u_vectors)} u vectors for propagation)"
                 )
@@ -804,7 +809,7 @@ def compute_correction(
                     "Falling back to current parameters θ[τ] for HVP."
                 )
     elif K_used > 0 and not use_historical_params:
-        logger.info("Historical parameter reconstruction disabled by user")
+        logger.debug("Historical parameter reconstruction disabled by user")
 
     # 如果使用历史参数，先保存当前参数 θ[τ] 并计算 θ[start]
     # 维护 theta_current 作为 flat 向量，避免每步重复 get/set
