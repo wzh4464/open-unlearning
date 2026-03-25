@@ -421,19 +421,22 @@ class TrainingLogger:
         )
 
     def _writer_loop(self):
-        """后台写入线程的主循环"""
+        """后台写入线程的主循环 — supports both pickle and torch.save"""
         while not self._stop_writer.is_set():
             try:
                 task = self._write_queue.get(timeout=0.5)
                 if task is None:  # 停止信号
                     break
-                file_path, data = task
-                with open(file_path, "wb") as f:
-                    pickle.dump(data, f)
+                file_path, data, fmt = task  # fmt: "pickle" or "torch"
+                if fmt == "torch":
+                    torch.save(data, file_path)
+                else:
+                    with open(file_path, "wb") as f:
+                        pickle.dump(data, f)
                 self._write_queue.task_done()
                 logger.debug(f"Async write completed: {file_path}")
             except Exception:
-                continue  # 超时或其他错误，继续检查停止标志
+                continue
 
     def start_async_writer(self):
         """启动后台写入线程"""
@@ -873,18 +876,20 @@ class TrainingLogger:
             logger.debug(f"No new records to save at step {step_id}")
             return
 
-        # Save each record: u[t] as torch tensor file (fast), metadata as JSON-in-pickle
+        # Save each record: u[t] via async torch.save, metadata as small pickle
         u_dir = self.log_dir / "u_vectors"
         u_dir.mkdir(exist_ok=True)
 
+        self.start_async_writer()
+
         for rec in new_records:
             sid = rec.step_id
-            # Save u[t] as standalone .pt file (torch.save is much faster than pickle for large tensors)
+            # Queue u[t] for async torch.save (much faster than pickle for large tensors)
             if rec.u is not None:
                 u_path = u_dir / f"u_{sid:06d}.pt"
-                torch.save(rec.u.cpu(), u_path)
+                self._write_queue.put((u_path, rec.u.cpu(), "torch"))
 
-            # Save lightweight metadata as pickle (tiny, fast)
+            # Save lightweight metadata synchronously (tiny, instant)
             meta_dict = {
                 "step_id": sid,
                 "eta": rec.eta,
@@ -897,7 +902,7 @@ class TrainingLogger:
                 pickle.dump(meta_dict, f)
 
         logger.info(
-            f"Saved {len(new_records)} records (torch.save) at step {step_id}"
+            f"Queued {len(new_records)} u[t] for async write at step {step_id}"
         )
 
         # 更新已保存的最后一个 step_id
