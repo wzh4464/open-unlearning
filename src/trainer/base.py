@@ -199,6 +199,20 @@ class FinetuneTrainer(Trainer):
             )
             return
 
+        # Verify plain SGD (no momentum/Nesterov) — the hook computes
+        # u[t] = -lr * grad which is only exact without momentum.
+        for group in self.optimizer.param_groups:
+            momentum = group.get("momentum", 0.0)
+            nesterov = group.get("nesterov", False)
+            if momentum != 0.0 or nesterov:
+                logger.warning(
+                    f"SGD optimizer has momentum={momentum}, nesterov={nesterov}. "
+                    "The gradient hook computes u[t] = -lr * grad which is only "
+                    "exact for plain SGD (momentum=0). Falling back to "
+                    "clone_parameters for accurate u[t] computation."
+                )
+                return
+
         def _capture_u_from_grad(optimizer, args, kwargs):
             """Optimizer step pre-hook: capture u[t] = -lr * grad (bf16, CPU)."""
             parts = []
@@ -211,7 +225,8 @@ class FinetuneTrainer(Trainer):
                         # SGD with weight_decay applies: p.grad += weight_decay * p
                         # so effective update is -lr * (grad + weight_decay * p)
                         if weight_decay != 0.0:
-                            update = -(grad + weight_decay * p.data).view(-1)
+                            p_detached = p.detach()
+                            update = -(grad + weight_decay * p_detached).view(-1)
                         else:
                             update = (-grad).view(-1)
                         parts.append((lr * update).to(torch.bfloat16).cpu())

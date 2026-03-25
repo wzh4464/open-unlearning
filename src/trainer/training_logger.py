@@ -427,7 +427,12 @@ class TrainingLogger:
                 task = self._write_queue.get(timeout=0.5)
                 if task is None:  # 停止信号
                     break
-                file_path, data, fmt = task  # fmt: "pickle" or "torch"
+                # Support both (path, data, fmt) and legacy (path, data) tuples
+                if len(task) == 3:
+                    file_path, data, fmt = task
+                else:
+                    file_path, data = task
+                    fmt = "pickle"
                 if fmt == "torch":
                     torch.save(data, file_path)
                 else:
@@ -623,8 +628,8 @@ class TrainingLogger:
 
         # 保存当前参数用于下一步
         # Note: Skip with DeepSpeed ZeRO-3 as parameters are sharded
-        # Skip entirely when u was provided externally (e.g. SGD hook) --
-        # no need to clone parameters since we never diff them.
+        # When u was provided externally (e.g. SGD hook), clear prev_params
+        # to avoid stale snapshots if the hook is later disabled.
         if model is not None and not u_provided_externally:
             try:
                 self.prev_params = clone_parameters(model)
@@ -632,6 +637,10 @@ class TrainingLogger:
                 logger.debug(
                     f"Failed to clone parameters: {e}. This is expected with DeepSpeed ZeRO-3."
                 )
+        elif u_provided_externally:
+            # Clear prev_params so a future fallback to clone-based u[t]
+            # doesn't silently reuse a stale snapshot.
+            self.prev_params = None
 
         # Save sparse checkpoint if enabled and at the right stride
         if (
@@ -880,14 +889,18 @@ class TrainingLogger:
         u_dir = self.log_dir / "u_vectors"
         u_dir.mkdir(exist_ok=True)
 
-        self.start_async_writer()
+        if self._async_write:
+            self.start_async_writer()
 
         for rec in new_records:
             sid = rec.step_id
-            # Queue u[t] for async torch.save (much faster than pickle for large tensors)
+            # Save u[t] via torch.save (much faster than pickle for large tensors)
             if rec.u is not None:
                 u_path = u_dir / f"u_{sid:06d}.pt"
-                self._write_queue.put((u_path, rec.u.cpu(), "torch"))
+                if self._async_write:
+                    self._write_queue.put((u_path, rec.u.cpu(), "torch"))
+                else:
+                    torch.save(rec.u.cpu(), u_path)
 
             # Save lightweight metadata synchronously (tiny, instant)
             meta_dict = {
