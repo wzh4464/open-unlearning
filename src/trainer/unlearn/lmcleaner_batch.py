@@ -38,10 +38,9 @@ from .lmcleaner_core import (
     AuditRecord,
     StepRecord,
     StepLog,
+    HistoricalParamProvider,
     compute_correction,
     apply_correction,
-    compute_noise_sigma,
-    inject_privacy_noise,
 )
 from ..training_logger import TrainingLogger, BatchReconstructor, LazyRecordLoader
 
@@ -259,9 +258,13 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # 初始化批次重建器(如果需要)
         if self.batch_reconstructor is None and hasattr(self, "data_collator"):
             if self._finetune_dataset is None:
-                logger.info(f"Loading original finetune dataset: {self.finetune_dataset_path}/{self.finetune_dataset_name}")
+                logger.info(
+                    f"Loading original finetune dataset: {self.finetune_dataset_path}/{self.finetune_dataset_name}"
+                )
                 self._finetune_dataset = self._load_finetune_dataset()
-                logger.info(f"Loaded finetune dataset with {len(self._finetune_dataset)} samples")
+                logger.info(
+                    f"Loaded finetune dataset with {len(self._finetune_dataset)} samples"
+                )
 
             self.batch_reconstructor = BatchReconstructor(
                 training_logger=self.training_logger,
@@ -271,7 +274,11 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             logger.info("Initialized BatchReconstructor for batch data reconstruction")
 
         # 当前步骤(训练结束时的步骤，或用户指定的max_step)
-        tau = self.max_step if self.max_step is not None else self.training_logger.current_step
+        tau = (
+            self.max_step
+            if self.max_step is not None
+            else self.training_logger.current_step
+        )
 
         # 过滤forget steps
         original_count = len(forget_steps)
@@ -292,12 +299,24 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         logger.info(f"Applying unlearning for {len(forget_steps)} batches")
         logger.info(f"Target step (tau): {tau}, K: {self.K}")
 
+        # Create historical parameter provider
+        historical_param_provider = None
+        if self.use_historical_params:
+            historical_param_provider = HistoricalParamProvider(
+                model=self.model,
+                log_dir=str(self.training_log_dir),
+                lazy_loader=self.lazy_loader,
+                max_cache_entries=4,
+            )
+
         for i, tz in enumerate(forget_steps):
             logger.info(f"Processing forget step {i + 1}/{len(forget_steps)}: tz={tz}")
 
             try:
                 # 只加载初始记录 (tz 对应的记录，用于 Phase 1)
-                initial_rec_dict = self.lazy_loader.load_single_step(tz, include_tensors=True)
+                initial_rec_dict = self.lazy_loader.load_single_step(
+                    tz, include_tensors=True
+                )
 
                 if initial_rec_dict is None:
                     logger.warning(f"No record found for step {tz}, skipping")
@@ -329,6 +348,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                     lazy_loader=self.lazy_loader,  # 传入 lazy_loader 用于按需加载
                     initial_record=initial_record,  # 传入初始记录
                     use_historical_params=self.use_historical_params,
+                    historical_param_provider=historical_param_provider,
                 )
 
                 # Phase 3: 应用校正
@@ -338,7 +358,11 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                 logger.info(
                     f"Applied correction for step {tz}: "
                     f"v_norm={audit.v_norm:.6f}, K_used={audit.K_used}, hvp_calls={audit.hvp_calls}"
-                    + (f", noise_σ={audit.noise_sigma:.6f}" if audit.noise_injected else "")
+                    + (
+                        f", noise_σ={audit.noise_sigma:.6f}"
+                        if audit.noise_injected
+                        else ""
+                    )
                 )
 
                 # 清理内存
@@ -350,8 +374,12 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             except Exception as e:
                 logger.error(f"Failed to apply correction for step {tz}: {e}")
                 import traceback
+
                 traceback.print_exc()
                 continue
+
+        if historical_param_provider is not None:
+            historical_param_provider.cleanup()
 
         if self.audit_dir:
             self._save_audit_records()
@@ -418,11 +446,15 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # 获取 tokenizer 和模板参数
         tokenizer = self.tokenizer
         # 从 config 中获取 template_args (如果有的话)
-        template_args = getattr(self, "template_args", {
-            "sys_prompt": None,
-            "incontext_prompt": None,
-            "incontext_response": None,
-        })
+        template_args = getattr(
+            self,
+            "template_args",
+            {
+                "sys_prompt": None,
+                "incontext_prompt": None,
+                "incontext_response": None,
+            },
+        )
 
         # 创建简单的数据集包装器
         class SimpleQADataset:
@@ -551,7 +583,6 @@ def run_lmcleaner_batch_unlearning(
     Returns:
         遗忘后的模型
     """
-    from .lmcleaner_core import StepLog
 
     training_log_dir = Path(training_log_dir)
 

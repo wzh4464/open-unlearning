@@ -93,7 +93,9 @@ class LazyRecordLoader:
             try:
                 with open(index_cache) as f:
                     self._chunk_index = {k: tuple(v) for k, v in json.load(f).items()}
-                logger.info(f"Loaded cached chunk index with {len(self._chunk_index)} entries")
+                logger.info(
+                    f"Loaded cached chunk index with {len(self._chunk_index)} entries"
+                )
                 self._build_step_to_chunk_map()
                 return
             except (json.JSONDecodeError, ValueError) as e:
@@ -141,9 +143,7 @@ class LazyRecordLoader:
         return sorted([s for s in self.sample_indices.keys() if s in available_steps])
 
     def load_steps(
-        self,
-        step_ids: List[int],
-        include_tensors: bool = True
+        self, step_ids: List[int], include_tensors: bool = True
     ) -> List[Dict]:
         """
         按需加载指定步骤的记录
@@ -173,7 +173,9 @@ class LazyRecordLoader:
             logger.warning("No chunks found for requested steps")
             return []
 
-        logger.debug(f"Loading {len(step_ids)} steps from {len(chunks_needed)} chunks...")
+        logger.debug(
+            f"Loading {len(step_ids)} steps from {len(chunks_needed)} chunks..."
+        )
 
         def load_chunk_filtered(chunk_name: str, wanted_steps: Set[int]) -> List[Dict]:
             chunk_file = self.log_dir / chunk_name
@@ -186,7 +188,11 @@ class LazyRecordLoader:
                     if r["step_id"] in wanted_steps:
                         if not include_tensors:
                             # 移除 tensor 数据以节省内存
-                            r = {k: v for k, v in r.items() if k not in ("u", "gbar", "diag_H")}
+                            r = {
+                                k: v
+                                for k, v in r.items()
+                                if k not in ("u", "gbar", "diag_H")
+                            }
                         filtered.append(r)
                 return filtered
             except Exception as e:
@@ -212,7 +218,9 @@ class LazyRecordLoader:
         logger.debug(f"Loaded {len(results)} records")
         return results
 
-    def load_single_step(self, step_id: int, include_tensors: bool = True) -> Optional[Dict]:
+    def load_single_step(
+        self, step_id: int, include_tensors: bool = True
+    ) -> Optional[Dict]:
         """
         加载单个步骤的记录
 
@@ -316,6 +324,10 @@ class TrainingLogger:
         checkpoints_per_epoch: int = 0,
         save_at_epoch_end: bool = False,
         sync_mode: bool = False,
+        # Sparse checkpoints for historical parameter reconstruction
+        save_sparse_checkpoints: bool = False,
+        checkpoint_stride: int = 25,
+        checkpoint_dtype: str = "fp32",  # fp32/bf16
     ):
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -327,6 +339,15 @@ class TrainingLogger:
         self.save_rng_state = save_rng_state
         self.compute_diag_h = compute_diag_h
         self.batch_size_at_training = batch_size_at_training
+
+        # Sparse checkpoints for historical parameter reconstruction
+        self.save_sparse_checkpoints = save_sparse_checkpoints
+        self.checkpoint_stride = checkpoint_stride
+        self.checkpoint_dtype = checkpoint_dtype
+        self.sparse_checkpoints_dir = self.log_dir / "sparse_checkpoints"
+        if save_sparse_checkpoints:
+            self.sparse_checkpoints_dir.mkdir(parents=True, exist_ok=True)
+        self._checkpoint_index: Dict[int, str] = {}
 
         # Epoch-aware checkpoint parameters
         self.steps_per_epoch = steps_per_epoch
@@ -472,9 +493,24 @@ class TrainingLogger:
             keys_to_remove = [k for k, v in sorted_items[:-max_entries]]
             for key in keys_to_remove:
                 del self.batch_index[key]
-            logger.debug(
-                f"Pruned {len(keys_to_remove)} old entries from batch_index"
-            )
+            logger.debug(f"Pruned {len(keys_to_remove)} old entries from batch_index")
+
+    def _save_sparse_checkpoint(self, step_id: int, model: nn.Module):
+        """Save a sparse checkpoint of model parameters for historical reconstruction."""
+        if not self.save_sparse_checkpoints:
+            return
+        checkpoint_file = self.sparse_checkpoints_dir / f"step_{step_id:06d}.pt"
+        # Only save parameters that require grad (trainable params)
+        trainable_state = {}
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                if self.checkpoint_dtype == "bf16":
+                    trainable_state[name] = param.detach().cpu().to(torch.bfloat16)
+                else:
+                    trainable_state[name] = param.detach().cpu()
+        torch.save(trainable_state, checkpoint_file)
+        self._checkpoint_index[step_id] = str(checkpoint_file.relative_to(self.log_dir))
+        logger.info(f"Saved sparse checkpoint at step {step_id} to {checkpoint_file}")
 
     def register_step(
         self,
@@ -578,6 +614,14 @@ class TrainingLogger:
                 logger.debug(
                     f"Failed to clone parameters: {e}. This is expected with DeepSpeed ZeRO-3."
                 )
+
+        # Save sparse checkpoint if enabled and at the right stride
+        if (
+            self.save_sparse_checkpoints
+            and model is not None
+            and step_id % self.checkpoint_stride == 0
+        ):
+            self._save_sparse_checkpoint(step_id, model)
 
         # 定期保存到磁盘
         if self.save_interval > 0 and step_id % self.save_interval == 0:
@@ -749,11 +793,30 @@ class TrainingLogger:
             "current_epoch": self.current_epoch,
             "epoch_end_steps": self.epoch_end_steps,
             "incremental_save": True,  # 标记使用增量保存格式
+            "save_sparse_checkpoints": self.save_sparse_checkpoints,
+            "checkpoint_stride": self.checkpoint_stride,
+            "checkpoint_dtype": self.checkpoint_dtype,
         }
 
         meta_file = self.log_dir / "meta.json"
         with open(meta_file, "w") as f:
             json.dump(meta, f, indent=2)
+
+        # Save sparse checkpoint index
+        if self.save_sparse_checkpoints and self._checkpoint_index:
+            ckpt_index_file = self.log_dir / "checkpoint_index.json"
+            with open(ckpt_index_file, "w") as f:
+                json.dump(
+                    {
+                        "stride": self.checkpoint_stride,
+                        "dtype": self.checkpoint_dtype,
+                        "checkpoints": {
+                            str(k): v for k, v in self._checkpoint_index.items()
+                        },
+                    },
+                    f,
+                    indent=2,
+                )
 
         # 保存批次索引
         index_file = self.log_dir / "batch_index.json"
@@ -856,7 +919,7 @@ class TrainingLogger:
         # Clear step_log buffer and step_map to prevent unbounded memory growth
         # Data is now safely on disk, no need to keep in memory
         self.step_log.buffer.clear()
-        if hasattr(self.step_log, 'step_map'):
+        if hasattr(self.step_log, "step_map"):
             self.step_log.step_map.clear()
         logger.debug("Cleared step_log buffer after saving")
 
@@ -894,10 +957,29 @@ class TrainingLogger:
         self.current_epoch = meta.get("current_epoch", 0)
         self.epoch_end_steps = meta.get("epoch_end_steps", [])
 
+        # Restore sparse checkpoint settings
+        self.save_sparse_checkpoints = meta.get("save_sparse_checkpoints", False)
+        self.checkpoint_stride = meta.get("checkpoint_stride", 25)
+        self.checkpoint_dtype = meta.get("checkpoint_dtype", "fp32")
+
         # 恢复当前步数和保存状态
         self.current_step = meta.get("current_step", 0)
         # Mark all historical data as already saved - this is critical to prevent re-saving
         self._last_saved_step_id = self.current_step
+
+        # Load sparse checkpoint index
+        ckpt_index_file = self.log_dir / "checkpoint_index.json"
+        if ckpt_index_file.exists():
+            with open(ckpt_index_file) as f:
+                ckpt_data = json.load(f)
+            self._checkpoint_index = {
+                int(k): v for k, v in ckpt_data.get("checkpoints", {}).items()
+            }
+            self.checkpoint_stride = ckpt_data.get("stride", 25)
+            self.checkpoint_dtype = ckpt_data.get("dtype", "fp32")
+            logger.info(
+                f"Loaded sparse checkpoint index with {len(self._checkpoint_index)} entries"
+            )
 
         # 加载批次索引 (small, needed for operation)
         # Note: For very long training runs, batch_index can grow large.
@@ -910,7 +992,7 @@ class TrainingLogger:
         # Clear step_log - historical data is already on disk, no need to load into memory
         # This prevents memory explosion when resuming after many steps
         self.step_log.clear()
-        if hasattr(self.step_log, 'step_map'):
+        if hasattr(self.step_log, "step_map"):
             self.step_log.step_map.clear()
 
         # 加载样本索引(轻存储模式) - 需要在所有情况下加载用于批次重建
@@ -923,7 +1005,9 @@ class TrainingLogger:
                 self.sample_indices_per_step = {
                     int(k): v for k, v in serializable_indices.items()
                 }
-            logger.info(f"Loaded sample_indices for {len(self.sample_indices_per_step)} steps")
+            logger.info(
+                f"Loaded sample_indices for {len(self.sample_indices_per_step)} steps"
+            )
 
         # Only load tensors if explicitly requested (for analysis/debugging)
         if not load_tensors:
