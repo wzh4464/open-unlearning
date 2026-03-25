@@ -23,9 +23,12 @@ RESULTS_DIR="saves/results/expA"
 # Training Configuration
 # ============================================
 NUM_EPOCHS=1
-STEPS_PER_EPOCH=250  # 4000 samples / effective_batch_16
-PER_DEVICE_BATCH_SIZE=4
-GRADIENT_ACCUMULATION_STEPS=4
+# H200 has 143GB VRAM; 7B bf16 + grad_ckpt allows batch_size=8 comfortably.
+# Effective batch = 8 * 8 = 64 -> steps = ceil(4000/64) = 63
+# This reduces u[t] storage from 250 * 6.75GB = 1.7TB to 63 * 6.75GB = 425GB
+PER_DEVICE_BATCH_SIZE=8
+GRADIENT_ACCUMULATION_STEPS=8
+STEPS_PER_EPOCH=63  # 4000 samples / effective_batch_64
 LEARNING_RATE="1e-5"
 WEIGHT_DECAY="0.01"
 WARMUP_EPOCHS="0.1"  # 10% warmup for single-epoch training
