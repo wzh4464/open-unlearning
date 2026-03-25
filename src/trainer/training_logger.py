@@ -425,8 +425,11 @@ class TrainingLogger:
         while not self._stop_writer.is_set():
             try:
                 task = self._write_queue.get(timeout=0.5)
-                if task is None:  # 停止信号
-                    break
+            except Exception:
+                continue  # Timeout or stop event, retry
+            if task is None:  # 停止信号
+                break
+            try:
                 # Support both (path, data, fmt) and legacy (path, data) tuples
                 if len(task) == 3:
                     file_path, data, fmt = task
@@ -438,11 +441,11 @@ class TrainingLogger:
                 else:
                     with open(file_path, "wb") as f:
                         pickle.dump(data, f)
-                self._write_queue.task_done()
                 logger.debug(f"Async write completed: {file_path}")
             except Exception as e:
                 logger.debug(f"Async writer error: {e}")
-                continue
+            finally:
+                self._write_queue.task_done()
 
     def start_async_writer(self):
         """启动后台写入线程"""

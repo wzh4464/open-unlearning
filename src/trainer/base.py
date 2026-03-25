@@ -191,10 +191,9 @@ class FinetuneTrainer(Trainer):
         if self._sgd_hook_handle is not None:
             return  # Already installed
 
-        optim_cls_name = type(self.optimizer).__name__.lower()
-        if "sgd" not in optim_cls_name:
+        if not isinstance(self.optimizer, torch.optim.SGD):
             logger.info(
-                f"Optimizer is {type(self.optimizer).__name__}, not SGD. "
+                f"Optimizer is {type(self.optimizer).__name__}, not torch.optim.SGD. "
                 "Using clone_parameters fallback for u[t] computation."
             )
             return
