@@ -325,9 +325,9 @@ class TrainingLogger:
         save_at_epoch_end: bool = False,
         sync_mode: bool = False,
         # Sparse checkpoints for historical parameter reconstruction
-        save_sparse_checkpoints: bool = False,
-        checkpoint_stride: int = 25,
-        checkpoint_dtype: str = "fp32",  # fp32/bf16
+        save_sparse_checkpoints: bool = True,
+        checkpoint_stride: int = 50,
+        checkpoint_dtype: str = "bf16",  # fp32/bf16
     ):
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
