@@ -18,18 +18,24 @@ RETRAIN_EVAL_JSON=""
 evaluate_model() {
     local model_path=$1
     local task_name=$2
-    local retain_logs=${3:-"null"}
+    local retain_logs=${3:-}
     local eval_output_dir="${model_path}/evals"
 
     echo "----------------------------------------------"
     echo "Evaluating: ${task_name}"
     echo "Model: ${model_path}"
-    echo "retain_logs_path: ${retain_logs}"
+    echo "retain_logs_path: ${retain_logs:-<config default>}"
     echo "----------------------------------------------"
 
     if [ ! -d "${model_path}" ]; then
         echo "WARNING: Model not found: ${model_path}. Skipping."
         return
+    fi
+
+    # Build retain_logs_path override only when a real path is provided
+    local retain_override=()
+    if [ -n "${retain_logs}" ]; then
+        retain_override=("retain_logs_path=${retain_logs}")
     fi
 
     $PYTHON_CMD src/eval.py --config-name=eval.yaml \
@@ -41,7 +47,7 @@ evaluate_model() {
         model.model_args.pretrained_model_name_or_path="${model_path}" \
         model.tokenizer_args.pretrained_model_name_or_path="${BASE_MODEL_PATH}" \
         paths.output_dir="${eval_output_dir}" \
-        retain_logs_path="${retain_logs}"
+        "${retain_override[@]}"
 
     echo "Done: ${task_name}"
 }
@@ -54,8 +60,8 @@ RETRAIN_EVAL_JSON="${RETRAIN_DIR}/evals/TOFU_EVAL.json"
 
 if [ ! -f "${RETRAIN_EVAL_JSON}" ]; then
     echo "WARNING: Retrain eval output not found at ${RETRAIN_EVAL_JSON}"
-    echo "forget_quality and privleak will use fallback values."
-    RETRAIN_EVAL_JSON="null"
+    echo "forget_quality and privleak will use config defaults."
+    RETRAIN_EVAL_JSON=""
 fi
 
 # 2. Evaluate original finetuned model (reference)

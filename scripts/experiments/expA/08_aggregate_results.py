@@ -39,26 +39,30 @@ def extract_metrics(model_dir):
     """Extract all metrics from a model directory."""
     result = {}
 
-    # Basic eval
+    # Basic eval - read both SUMMARY and EVAL files (they contain different data)
     for subdir in ["evals", "."]:
+        found = False
         for fname in ["TOFU_SUMMARY.json", "TOFU_EVAL.json"]:
             p = model_dir / subdir / fname
             if p.exists():
+                found = True
                 data = load_json(p)
                 if fname == "TOFU_SUMMARY.json":
                     result.update(data)
                 elif fname == "TOFU_EVAL.json":
-                    # Extract agg_value from each metric
                     for metric_name, metric_data in data.items():
                         if isinstance(metric_data, dict) and "agg_value" in metric_data:
                             result[metric_name] = metric_data["agg_value"]
-                break
+        if found:
+            break  # Found files in this subdir, skip next subdir
 
-    # MIA eval
+    # MIA eval - read both SUMMARY and EVAL files
     for subdir in ["evals_mia", "."]:
+        found = False
         for fname in ["TOFU_SUMMARY.json", "TOFU_EVAL.json"]:
             p = model_dir / subdir / fname
             if p.exists():
+                found = True
                 data = load_json(p)
                 if fname == "TOFU_SUMMARY.json":
                     for k, v in data.items():
@@ -67,7 +71,8 @@ def extract_metrics(model_dir):
                     for metric_name, metric_data in data.items():
                         if isinstance(metric_data, dict) and "agg_value" in metric_data:
                             result[f"mia_{metric_name}"] = metric_data["agg_value"]
-                break
+        if found:
+            break  # Found files in this subdir, skip next subdir
 
     # Efficiency
     eff_path = model_dir / "efficiency_metrics.json"

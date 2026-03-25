@@ -5,7 +5,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/config.sh"
 
-cd /app
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+cd "${PROJECT_ROOT}"
 mkdir -p "${RESULTS_DIR}"
 
 MODEL_SHARD="${BASE_MODEL_PATH}/model-00001-of-00002.safetensors"
