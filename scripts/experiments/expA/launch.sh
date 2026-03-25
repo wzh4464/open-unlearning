@@ -12,7 +12,10 @@ mkdir -p "${RESULTS_DIR}"
 MODEL_SHARD="${BASE_MODEL_PATH}/model-00001-of-00002.safetensors"
 EXPECTED_SIZE_MB=9000  # ~9.29GB
 
-echo "Waiting for model download to complete..."
+MAX_WAIT_SEC=3600  # Timeout after 1 hour
+ELAPSED=0
+
+echo "Waiting for model download to complete (timeout: ${MAX_WAIT_SEC}s)..."
 echo "Checking: ${MODEL_SHARD}"
 
 while true; do
@@ -22,11 +25,16 @@ while true; do
             echo "Model shard complete: ${SIZE_MB}MB"
             break
         fi
-        echo "  Model shard: ${SIZE_MB}MB / ~9290MB ..."
+        echo "  Model shard: ${SIZE_MB}MB / ~9290MB ... (${ELAPSED}s elapsed)"
     else
-        echo "  Waiting for model shard file to appear..."
+        echo "  Waiting for model shard file to appear... (${ELAPSED}s elapsed)"
+    fi
+    if [ "${ELAPSED}" -ge "${MAX_WAIT_SEC}" ]; then
+        echo "ERROR: Model download timed out after ${MAX_WAIT_SEC}s"
+        exit 1
     fi
     sleep 30
+    ELAPSED=$((ELAPSED + 30))
 done
 
 echo ""

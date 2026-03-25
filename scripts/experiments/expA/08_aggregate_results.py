@@ -8,10 +8,13 @@ from pathlib import Path
 
 
 def load_json(path):
-    """Load JSON file, return empty dict if not found."""
+    """Load JSON file, return empty dict if not found or on parse error."""
     if path.exists():
-        with open(path) as f:
-            return json.load(f)
+        try:
+            with open(path) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"WARNING: Failed to load {path}: {e}")
     return {}
 
 
