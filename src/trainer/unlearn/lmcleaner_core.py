@@ -55,6 +55,8 @@ class AuditRecord(dict):
     noise_injected: bool = False  # 是否注入了隐私噪声
     epsilon: float = 0.0  # (ε,δ)-certified unlearning 的 ε
     delta: float = 0.0  # (ε,δ)-certified unlearning 的 δ
+    # 历史参数重建
+    used_historical_params: bool = False  # 是否实际使用了历史 θ[s]
 
     def __post_init__(self):
         # 使其可以像字典一样使用
@@ -71,6 +73,7 @@ class AuditRecord(dict):
             noise_injected=self.noise_injected,
             epsilon=self.epsilon,
             delta=self.delta,
+            used_historical_params=self.used_historical_params,
         )
 
 
@@ -774,14 +777,14 @@ def compute_correction(
             # Phase B: 计算 θ[start] = θ[τ] - Σ_{t=start}^{τ-1} u[t]
             # 对于窗口之后 [end+1, tau-1] 的 u 向量，流式累加后丢弃，不存储
             _tail_ok = True
-            _tail_sum = torch.zeros(1, device=model_device)  # 延迟初始化
+            _tail_sum: Optional[torch.Tensor] = None
             for t in range(end + 1, tau):
                 u_t = _load_u(t)
                 if u_t is None:
                     _tail_ok = False
                     break
                 u_t = u_t.to(model_device)
-                if _tail_sum.numel() == 1:
+                if _tail_sum is None:
                     _tail_sum = u_t.clone()
                 else:
                     _tail_sum += u_t
@@ -813,7 +816,7 @@ def compute_correction(
         theta_current = theta_tau.clone()
         for t in range(start, end + 1):
             theta_current -= u_vectors[t]
-        if _tail_sum.numel() > 1:
+        if _tail_sum is not None:
             theta_current -= _tail_sum
         del _tail_sum
         _set_flat_params(model, theta_current)
@@ -952,6 +955,7 @@ def compute_correction(
         noise_injected=noise_injected,
         epsilon=epsilon if noise_injected else 0.0,
         delta=delta if noise_injected else 0.0,
+        used_historical_params=_do_historical,
     )
 
     return v, audit
