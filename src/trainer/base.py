@@ -36,6 +36,65 @@ class EpochEndCallback(TrainerCallback):
         return control
 
 
+class StepEndCallback(TrainerCallback):
+    """Register accumulated sample indices with TrainingLogger after each optimizer step.
+
+    HF Trainer increments global_step AFTER training_step() returns, so we
+    use on_step_end() where global_step is already updated. This correctly
+    handles both full and partial gradient accumulation cycles.
+    """
+
+    def __init__(self, trainer_ref):
+        self._trainer = trainer_ref
+
+    def on_step_end(self, args, state, control, model=None, **kwargs):
+        trainer = self._trainer
+        if trainer.training_logger is None:
+            return control
+
+        step_id = state.global_step
+        eta = trainer.optimizer.param_groups[0]["lr"]
+
+        sample_indices = (
+            list(trainer._accumulated_sample_indices)
+            if trainer._accumulated_sample_indices
+            else None
+        )
+        trainer._accumulated_sample_indices.clear()
+
+        batch_data = None
+        if trainer.training_logger.save_batch_data and hasattr(trainer, "_last_inputs"):
+            batch_data = {
+                k: v.detach().cpu() if torch.is_tensor(v) else v
+                for k, v in trainer._last_inputs.items()
+            }
+
+        diag_H = None
+        if trainer.training_logger.compute_diag_h and model is not None:
+            try:
+                valid_grads = [
+                    p.grad.detach().pow(2).view(-1)
+                    for p in model.parameters()
+                    if p.grad is not None and p.grad.numel() > 0
+                ]
+                if valid_grads:
+                    diag_H = torch.cat(valid_grads)
+            except Exception:
+                pass
+
+        trainer.training_logger.register_step(
+            step_id=step_id,
+            batch_id=step_id,
+            eta=eta,
+            model=model,
+            batch_data=batch_data,
+            diag_H=diag_H,
+            sample_indices=sample_indices,
+        )
+
+        return control
+
+
 class MemoryPressureCallback(TrainerCallback):
     """Callback to pause training when memory pressure or I/O queue exceeds threshold"""
 
@@ -131,7 +190,6 @@ class FinetuneTrainer(Trainer):
         self.template_args = template_args
         self.training_logger = training_logger
         self._accumulated_sample_indices: list = []  # accumulate across grad accum steps
-        self._micro_batch_counter: int = 0  # track position within gradient accumulation
 
         # Handle tokenizer -> processing_class parameter name change in transformers 5.0+
         # Suppress the FutureWarning until we upgrade to transformers 5.0+
@@ -143,9 +201,10 @@ class FinetuneTrainer(Trainer):
             )
             super().__init__(*args, **kwargs)
 
-        # Add epoch end callback if training_logger is enabled
+        # Add training_logger callbacks
         if training_logger is not None:
             self.add_callback(EpochEndCallback(training_logger))
+            self.add_callback(StepEndCallback(self))
 
         # Add memory pressure callback (set threshold to 0 or None to disable)
         if memory_pressure_threshold and memory_pressure_threshold > 0:
@@ -196,93 +255,38 @@ class FinetuneTrainer(Trainer):
         return super().evaluate(eval_dataset, ignore_keys, metric_key_prefix)
 
     def training_step(self, model, inputs, num_items_in_batch=None):
-        """Override training_step to log training data if TrainingLogger is enabled.
+        """Override training_step to accumulate sample indices across micro-batches.
 
-        Handles gradient accumulation correctly: accumulates sample_indices across
-        all micro-batches within one optimizer step, then registers the full set
-        of indices on the last micro-batch of each accumulation cycle.
+        The actual registration with TrainingLogger happens in StepEndCallback.on_step_end(),
+        which fires after the optimizer step (global_step already incremented), correctly
+        handling both full and partial gradient accumulation cycles.
         """
         if self.training_logger is not None:
-            # Clone model state before the FIRST micro-batch of each optimizer step
-            if self._micro_batch_counter % self.args.gradient_accumulation_steps == 0:
-                if self.training_logger.prev_params is None:
-                    try:
-                        from trainer.unlearn.lmcleaner_core import clone_parameters
-                        self.training_logger.prev_params = clone_parameters(model)
-                    except Exception as e:
-                        logger.debug(
-                            f"Failed to clone initial parameters: {e}. "
-                            "This is expected with DeepSpeed ZeRO-3."
-                        )
+            # Clone model state once (before the very first micro-batch)
+            if self.training_logger.prev_params is None:
+                try:
+                    from trainer.unlearn.lmcleaner_core import clone_parameters
+                    self.training_logger.prev_params = clone_parameters(model)
+                except Exception as e:
+                    logger.debug(
+                        f"Failed to clone initial parameters: {e}. "
+                        "This is expected with DeepSpeed ZeRO-3."
+                    )
 
             # Accumulate sample indices from this micro-batch
-            if "idx" in inputs:
-                idx = inputs["idx"]
-                self._accumulated_sample_indices.extend(
-                    idx.cpu().tolist() if torch.is_tensor(idx) else idx
-                )
-            elif "index" in inputs:
-                idx = inputs["index"]
-                self._accumulated_sample_indices.extend(
-                    idx.cpu().tolist() if torch.is_tensor(idx) else idx
-                )
+            for key in ("idx", "index"):
+                if key in inputs:
+                    idx = inputs[key]
+                    self._accumulated_sample_indices.extend(
+                        idx.cpu().tolist() if torch.is_tensor(idx) else idx
+                    )
+                    break
 
-        # Perform the normal training step (forward + backward, no optimizer step yet)
+        # Perform the normal training step (forward + backward only)
         if num_items_in_batch is not None:
             loss = super().training_step(model, inputs, num_items_in_batch)
         else:
             loss = super().training_step(model, inputs)
-
-        if self.training_logger is not None:
-            self._micro_batch_counter += 1
-
-            # Register on the LAST micro-batch of each accumulation cycle
-            # (this is when the optimizer will step and global_step increments)
-            if self._micro_batch_counter % self.args.gradient_accumulation_steps == 0:
-                # global_step will be incremented by the outer loop right after this returns
-                # Use current global_step + 1 as the step_id
-                step_id = self.state.global_step + 1
-                eta = self.optimizer.param_groups[0]["lr"]
-
-                sample_indices = (
-                    list(self._accumulated_sample_indices)
-                    if self._accumulated_sample_indices
-                    else None
-                )
-                self._accumulated_sample_indices.clear()
-
-                batch_data = None
-                if self.training_logger.save_batch_data:
-                    batch_data = {
-                        k: v.detach().cpu() if torch.is_tensor(v) else v
-                        for k, v in inputs.items()
-                    }
-
-                diag_H = None
-                if self.training_logger.compute_diag_h:
-                    try:
-                        if hasattr(model, "named_parameters"):
-                            valid_grads = [
-                                p.grad.detach().pow(2).view(-1)
-                                for p in model.parameters()
-                                if p.grad is not None and p.grad.numel() > 0
-                            ]
-                            if valid_grads:
-                                diag_H = torch.cat(valid_grads)
-                    except Exception as e:
-                        logger.debug(
-                            f"Failed to compute diagonal Hessian: {e}. Skipping."
-                        )
-
-                self.training_logger.register_step(
-                    step_id=step_id,
-                    batch_id=step_id,
-                    eta=eta,
-                    model=model,
-                    batch_data=batch_data,
-                    diag_H=diag_H,
-                    sample_indices=sample_indices,
-                )
 
         return loss
 

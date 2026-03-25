@@ -127,12 +127,15 @@ def main():
     # Print summary table
     print(f"\n{'B':>4} {'K':>4} {'status':>12} {'utility':>10} {'forget_ROUGE':>13} {'time_s':>8} {'hvp':>6} {'gpu_mb':>8}")
     print("-" * 75)
+    def fmt(val, spec=".4f"):
+        return f"{val:{spec}}" if val is not None else "—"
+
     for r in rows:
-        u = f"{r.get('model_utility', 0):.4f}" if r.get("model_utility") else "—"
-        fr = f"{r.get('forget_Q_A_ROUGE', 0):.4f}" if r.get("forget_Q_A_ROUGE") else "—"
-        t = f"{r.get('unlearn_time_s', 0):.1f}" if r.get("unlearn_time_s") else "—"
-        h = f"{r.get('total_hvp_calls', 0)}" if r.get("total_hvp_calls") else "—"
-        g = f"{r.get('peak_gpu_mb', 0):.0f}" if r.get("peak_gpu_mb") else "—"
+        u = fmt(r.get("model_utility"))
+        fr = fmt(r.get("forget_Q_A_ROUGE"))
+        t = fmt(r.get("unlearn_time_s"), ".1f")
+        h = fmt(r.get("total_hvp_calls"), "d") if isinstance(r.get("total_hvp_calls"), int) else "—"
+        g = fmt(r.get("peak_gpu_mb"), ".0f")
         print(f"{r['B']:>4} {r['K']:>4} {r['status']:>12} {u:>10} {fr:>13} {t:>8} {h:>6} {g:>8}")
 
 
