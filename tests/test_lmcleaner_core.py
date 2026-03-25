@@ -883,6 +883,10 @@ class TestHistoricalParameterReconstruction:
         parameter trajectory. Then compare correction computed with and without
         historical parameter reconstruction.
         """
+        # Fixed seed for deterministic, reproducible test
+        rng_state = torch.get_rng_state()
+        torch.manual_seed(0)
+
         params = [p for p in simple_model.parameters() if p.requires_grad]
         param_count = sum(p.numel() for p in params)
 
@@ -939,6 +943,9 @@ class TestHistoricalParameterReconstruction:
         assert not torch.allclose(v_historical, v_current, atol=1e-6), \
             "Historical and current-param corrections should differ"
 
+        # Restore RNG state to avoid affecting other tests
+        torch.set_rng_state(rng_state)
+
     def test_model_params_restored_after_correction(self, simple_model, batch_data):
         """Verify model parameters are restored to θ[τ] after compute_correction."""
         params = [p for p in simple_model.parameters() if p.requires_grad]
@@ -975,6 +982,9 @@ class TestHistoricalParameterReconstruction:
 
     def test_fallback_when_u_missing(self, simple_model, batch_data):
         """When some u[t] are missing, should fall back to θ[τ] gracefully."""
+        # Capture θ before to verify restoration after fallback
+        theta_before = _get_flat_params(simple_model).clone()
+
         params = [p for p in simple_model.parameters() if p.requires_grad]
         param_count = sum(p.numel() for p in params)
 
@@ -1009,6 +1019,11 @@ class TestHistoricalParameterReconstruction:
 
         assert audit.hvp_calls == 3
         assert not torch.isnan(v).any()
+
+        # Model parameters should be restored after fallback-based correction
+        theta_after = _get_flat_params(simple_model)
+        assert torch.allclose(theta_before, theta_after, atol=1e-7), \
+            "Model parameters should be restored after fallback correction"
 
     def test_k_zero_unchanged_with_historical(self, simple_model, batch_data):
         """With K=0, no propagation occurs so historical params are irrelevant."""
