@@ -391,8 +391,8 @@ class LMCleanerSampleLevel(UnlearnTrainer):
 
         # Apply accumulated corrections (sum-then-apply mode)
         if use_sum_then_apply and v_total is not None:
-            apply_correction(v_total, params)
             aggregate_v_norm = float(v_total.norm().item())
+            apply_correction(v_total, params)
             logger.info(
                 f"Applied aggregated correction: v_total_norm={aggregate_v_norm:.6f}, "
                 f"num_forget_steps={len(forget_steps)}, "
