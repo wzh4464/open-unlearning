@@ -618,6 +618,8 @@ def compute_correction(
     # On-demand loading support for large K values
     lazy_loader: Optional[LazyLoaderProtocol] = None,
     initial_record: Optional[StepRecord] = None,
+    # Historical parameter reconstruction
+    use_historical_params: bool = True,
 ) -> Tuple[torch.Tensor, AuditRecord]:
     """
     计算参数校正向量(前向K步传播) - 论文 Algorithm 1 完整实现
@@ -632,9 +634,15 @@ def compute_correction(
     历史参数重建 (论文 Section 5 - Parameter Snapshots):
         θ[s] = θ[τ] - Σ_{t=s}^{τ-1} u[t]
         其中 u[t] = θ[t+1] - θ[t] 是每步的参数更新向量。
-        当 u[t] 向量可用时，在每步传播前将模型参数临时设为 θ[s],
-        计算 HVP 后恢复为 θ[τ]。
-        当 u[t] 不可用时，退化为使用 θ[τ] (与旧行为一致)。
+        当 use_historical_params=True 且 u[t] 向量可用时，在每步传播前
+        将模型参数临时设为 θ[s], 计算 HVP 后恢复为 θ[τ]。
+        当 u[t] 不可用或 use_historical_params=False 时，使用 θ[τ]。
+
+    ! 注意 (内存开销):
+    !   启用 use_historical_params 会额外占用约 1x 模型参数量的 GPU 显存
+    !   (用于维护 theta_current flat 向量) 以及读取窗口内 u[t] 的 IO 开销。
+    !   对于显存紧张的环境，可设置 use_historical_params=False 退化为旧行为。
+    !   详见 docs/historical_params_hvp.md
 
     注意 (与论文的差异):
     - 阻尼项 λ 是实现添加的数值稳定化技术，论文理论分析未包含
@@ -654,6 +662,9 @@ def compute_correction(
         delta_det: 近似误差上界 (如果为 None, 使用 ||v||₂ 作为估计)
         lazy_loader: 懒加载器，用于大 K 值时按需加载记录 (避免 OOM)
         initial_record: 初始步骤记录 (tz 对应的记录，用于 Phase 1)
+        use_historical_params: 是否在历史参数 θ[s] 处计算 HVP (默认 True)
+            True: 论文 Algorithm 1 的精确实现，额外 ~1x 模型参数量显存
+            False: 在 θ[τ] 处计算 HVP，节省显存但引入近似误差
 
     Returns:
         (v, audit_record): 校正向量和审计记录
@@ -722,8 +733,8 @@ def compute_correction(
     # 获取模型参数所在的 device (与 cfg.device 可能不同)
     model_device = next(model.parameters()).device
 
-    # 首先判断是否能使用历史参数
-    use_historical_params = False
+    # 首先判断是否能使用历史参数 (受 use_historical_params 参数控制)
+    _do_historical = False  # 最终决定 (需要 flag=True 且 u[t] 可用)
     # 只收集传播窗口 [start, end] 内的 u 向量 (用于逐步推进 θ[s])
     u_vectors: Dict[int, torch.Tensor] = {}
 
@@ -741,7 +752,7 @@ def compute_correction(
                 return srec_tmp.u
         return None
 
-    if K_used > 0:
+    if K_used > 0 and use_historical_params:
         # Phase A: 收集传播窗口 [start, end] 内的 u 向量
         _missing_u = False
         for t in range(start, end + 1):
@@ -777,7 +788,7 @@ def compute_correction(
                 del u_t
 
             if _tail_ok:
-                use_historical_params = True
+                _do_historical = True
                 logger.info(
                     f"Historical parameter reconstruction enabled for steps [{start}, {end}] "
                     f"(loaded {len(u_vectors)} u vectors for propagation)"
@@ -789,12 +800,14 @@ def compute_correction(
                     f"for tail steps in [{end + 1}, {tau - 1}]. "
                     "Falling back to current parameters θ[τ] for HVP."
                 )
+    elif K_used > 0 and not use_historical_params:
+        logger.info("Historical parameter reconstruction disabled by user")
 
     # 如果使用历史参数，先保存当前参数 θ[τ] 并计算 θ[start]
     # 维护 theta_current 作为 flat 向量，避免每步重复 get/set
     theta_tau: Optional[torch.Tensor] = None
     theta_current: Optional[torch.Tensor] = None
-    if use_historical_params:
+    if _do_historical:
         theta_tau = _get_flat_params(model).clone()
         # θ[start] = θ[τ] - Σ_{t=start}^{end} u[t] - Σ_{t=end+1}^{τ-1} u[t]
         theta_current = theta_tau.clone()
@@ -808,7 +821,7 @@ def compute_correction(
     # Helper: advance θ[s] -> θ[s+1] via theta_current += u[s]
     def _advance_theta(s: int) -> None:
         nonlocal theta_current
-        if use_historical_params and theta_current is not None and s in u_vectors:
+        if _do_historical and theta_current is not None and s in u_vectors:
             theta_current += u_vectors[s]
             _set_flat_params(model, theta_current)
 
@@ -857,7 +870,7 @@ def compute_correction(
                 _advance_theta(s)
                 continue
 
-        # 此时模型参数已是 θ[s] (如果 use_historical_params)
+        # 此时模型参数已是 θ[s] (如果 _do_historical)
         # 或者是 θ[τ] (fallback)
 
         # 计算 H[s] @ v
@@ -888,7 +901,7 @@ def compute_correction(
                     torch.cuda.empty_cache()
 
     # 恢复模型参数为 θ[τ]
-    if use_historical_params and theta_tau is not None:
+    if _do_historical and theta_tau is not None:
         _set_flat_params(model, theta_tau)
         del theta_tau, theta_current
         # 清理 u 向量

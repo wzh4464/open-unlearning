@@ -89,6 +89,11 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # Phase 4: 隐私噪声参数
         epsilon: float = 0.0,  # 默认不注入噪声
         delta: float = 1e-5,
+        # ! 历史参数重建: 在 θ[s] 处计算 HVP (论文 Algorithm 1)
+        # ! 额外占用 ~1x 模型参数量 GPU 显存 + 读取 u[t] 的 IO 开销
+        # ! 显存紧张时设为 False 退化为在 θ[τ] 处近似计算
+        # ! 详见 docs/historical_params_hvp.md
+        use_historical_params: bool = True,
         *args,
         **kwargs,
     ):
@@ -110,6 +115,9 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # Phase 4: 隐私参数
         self.epsilon = epsilon
         self.delta = delta
+
+        # 历史参数重建开关
+        self.use_historical_params = use_historical_params
 
         # HVP配置
         self.hvp_config = HVPConfig(
@@ -144,7 +152,8 @@ class LMCleanerBatchLevel(UnlearnTrainer):
 
         logger.info(
             f"LMCleanerBatchLevel initialized: K={K}, hessian_mode={hessian_mode}, "
-            f"damping={damping}, epsilon={epsilon}, delta={delta}"
+            f"damping={damping}, epsilon={epsilon}, delta={delta}, "
+            f"use_historical_params={use_historical_params}"
         )
 
         # 立即应用遗忘(如果设置)
@@ -319,6 +328,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                     delta=self.delta,
                     lazy_loader=self.lazy_loader,  # 传入 lazy_loader 用于按需加载
                     initial_record=initial_record,  # 传入初始记录
+                    use_historical_params=self.use_historical_params,
                 )
 
                 # Phase 3: 应用校正

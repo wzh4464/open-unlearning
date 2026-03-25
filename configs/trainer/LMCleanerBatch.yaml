@@ -43,6 +43,12 @@ method_args:
   # False: 在train()调用时应用遗忘
   apply_immediately: false
 
+  # ! 历史参数重建: 在 θ[s] 处计算 HVP (论文 Algorithm 1)
+  # ! 额外占用 ~1x 模型参数量 GPU 显存 + 读取 u[t] 的 IO 开销
+  # ! 显存紧张时设为 false 退化为在 θ[τ] 处近似计算
+  # ! 详见 docs/historical_params_hvp.md
+  use_historical_params: true
+
   # 审计日志输出目录 (可选)
   # 记录每次遗忘操作的详细信息
   audit_dir: ${paths.output_dir}/audit
