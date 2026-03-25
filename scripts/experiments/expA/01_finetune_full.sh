@@ -1,0 +1,56 @@
+#!/bin/bash
+# Experiment A - Step 1: Finetune Llama-2-7B on full TOFU (1 epoch)
+# Produces: finetuned model + TrainingLogger output for LMCleaner
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/config.sh"
+
+echo "=============================================="
+echo "ExpA Step 1: Finetune ${MODEL_NAME} on TOFU (1 epoch)"
+echo "=============================================="
+print_config
+
+# Verify base model exists
+if [ ! -d "${BASE_MODEL_PATH}" ]; then
+    echo "ERROR: Base model not found at ${BASE_MODEL_PATH}"
+    echo "Run: modelscope download --model shakechen/Llama-2-7b-hf"
+    exit 1
+fi
+
+TASK_NAME="${MODEL_SHORT}_tofu_1epoch"
+
+echo "Starting finetuning..."
+echo "Task: ${TASK_NAME}"
+echo "Output: ${FINETUNE_DIR}"
+echo "Training logs: ${TRAINING_LOG_DIR}"
+
+$PYTHON_CMD src/train.py --config-name=train.yaml \
+    experiment=finetune/tofu/default \
+    task_name="${TASK_NAME}" \
+    model="${MODEL_NAME}" \
+    model.model_args.pretrained_model_name_or_path="${BASE_MODEL_PATH}" \
+    model.tokenizer_args.pretrained_model_name_or_path="${BASE_MODEL_PATH}" \
+    trainer.args.num_train_epochs=${NUM_EPOCHS} \
+    trainer.args.learning_rate=${LEARNING_RATE} \
+    trainer.args.weight_decay=${WEIGHT_DECAY} \
+    trainer.args.warmup_epochs=${WARMUP_EPOCHS} \
+    trainer.args.per_device_train_batch_size=${PER_DEVICE_BATCH_SIZE} \
+    trainer.args.gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} \
+    trainer.args.gradient_checkpointing=true \
+    trainer.args.seed=${SEED} \
+    ++trainer.args.bf16=true \
+    ++trainer.args.save_strategy=epoch \
+    +trainer.args.training_logger.enabled=true \
+    +trainer.args.training_logger.log_dir="${TRAINING_LOG_DIR}" \
+    +trainer.args.training_logger.mode=batch \
+    +trainer.args.training_logger.save_indices_only=true \
+    +trainer.args.training_logger.save_batch_data=false \
+    +trainer.args.training_logger.save_rng_state=true \
+    +trainer.args.training_logger.save_interval=1 \
+    ++trainer.args.efficiency_tracking.enabled=true
+
+echo ""
+echo "Finetuning complete!"
+echo "Model: ${FINETUNE_DIR}"
+echo "Training logs: ${TRAINING_LOG_DIR}"

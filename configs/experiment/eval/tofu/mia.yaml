@@ -1,0 +1,24 @@
+# @package _global_
+
+defaults:
+  - override /model: Llama-2-7b-hf
+  - override /eval: tofu_mia
+
+forget_split: forget10
+holdout_split: holdout10
+retain_logs_path: null
+question_key: "question"
+
+model:
+  model_args:
+    pretrained_model_name_or_path: ???
+
+eval:
+  tofu:
+    forget_split: ${forget_split}
+    holdout_split: ${holdout_split}
+    retain_logs_path: ${retain_logs_path}
+    overwrite: true
+    question_key: ${question_key}
+
+task_name: ???
