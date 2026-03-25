@@ -440,7 +440,8 @@ class TrainingLogger:
                         pickle.dump(data, f)
                 self._write_queue.task_done()
                 logger.debug(f"Async write completed: {file_path}")
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Async writer error: {e}")
                 continue
 
     def start_async_writer(self):

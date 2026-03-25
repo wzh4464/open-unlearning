@@ -234,7 +234,8 @@ class FinetuneTrainer(Trainer):
                         # Keep on-device; single transfer after concatenation
                         parts.append(lr * update)
                     else:
-                        # Parameter has no gradient; its update is zero
+                        # Parameter has no gradient; pad with zeros to maintain
+                        # alignment with clone_parameters parameter ordering
                         parts.append(torch.zeros(p.numel(), device=p.device, dtype=p.dtype))
             if parts:
                 # Single GPU→CPU transfer and dtype conversion for the full vector
