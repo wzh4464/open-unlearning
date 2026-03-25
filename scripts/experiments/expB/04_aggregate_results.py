@@ -115,7 +115,8 @@ def main():
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    fieldnames = list(rows[0].keys())
+    all_keys = dict.fromkeys(k for row in rows for k in row.keys())
+    fieldnames = list(all_keys)
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()

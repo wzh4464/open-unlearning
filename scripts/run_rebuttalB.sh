@@ -12,7 +12,10 @@ for B in 32 64 128 256; do
 
     # micro_batch capped at 64 (GPU limit), rest via grad_accum
     if [ "$B" -le 64 ]; then MICRO=$B; ACCUM=1
-    else MICRO=64; ACCUM=$((B / 64)); fi
+    else
+        if [ $((B % 64)) -ne 0 ]; then echo "Error: B=$B not divisible by 64"; exit 1; fi
+        MICRO=64; ACCUM=$((B / 64))
+    fi
 
     STEPS=$((4000 / B))
 

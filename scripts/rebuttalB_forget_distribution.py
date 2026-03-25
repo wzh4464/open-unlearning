@@ -72,9 +72,12 @@ def gini_coefficient(values):
     if len(values) == 0:
         return 0.0
     sorted_vals = np.sort(values)
+    total = np.sum(sorted_vals)
+    if total == 0:
+        return 0.0
     n = len(sorted_vals)
     index = np.arange(1, n + 1)
-    return (2 * np.sum(index * sorted_vals) / (n * np.sum(sorted_vals))) - (n + 1) / n
+    return (2 * np.sum(index * sorted_vals) / (n * total)) - (n + 1) / n
 
 
 def herfindahl_index(values):

@@ -15,6 +15,7 @@ for B in 64 128 256 512; do
         MICRO=$B
         ACCUM=1
     else
+        if [ $((B % 64)) -ne 0 ]; then echo "Error: B=$B not divisible by 64"; exit 1; fi
         MICRO=64
         ACCUM=$((B / 64))
     fi

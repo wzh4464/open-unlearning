@@ -41,6 +41,10 @@ if [ "$EFFECTIVE_B" -le "$MAX_MICRO_BATCH" ]; then
     MICRO_BATCH=$EFFECTIVE_B
     GRAD_ACCUM=1
 else
+    if [ $((EFFECTIVE_B % MAX_MICRO_BATCH)) -ne 0 ]; then
+        echo "Error: EFFECTIVE_B=$EFFECTIVE_B is not divisible by MAX_MICRO_BATCH=$MAX_MICRO_BATCH"
+        exit 1
+    fi
     MICRO_BATCH=$MAX_MICRO_BATCH
     GRAD_ACCUM=$((EFFECTIVE_B / MICRO_BATCH))
 fi
