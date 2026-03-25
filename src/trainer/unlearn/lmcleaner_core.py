@@ -869,12 +869,13 @@ def compute_correction(
         eta_map = None
 
     # --- 历史参数重建 (via context manager) ---
+    # Only construct when there are propagation steps and flag is enabled
     hist_ctx = HistoricalParamContext(
         model=model,
         start=start,
         end=end,
         tau=tau,
-        enabled=use_historical_params,
+        enabled=use_historical_params and K_used > 0,
         step_log=step_log,
         lazy_loader=lazy_loader,
         use_lazy_loading=use_lazy_loading,
