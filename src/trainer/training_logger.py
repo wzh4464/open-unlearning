@@ -343,6 +343,11 @@ class TrainingLogger:
         # Sparse checkpoints for historical parameter reconstruction
         self.save_sparse_checkpoints = save_sparse_checkpoints
         self.checkpoint_stride = checkpoint_stride
+        _valid_dtypes = {"fp32", "bf16"}
+        if checkpoint_dtype not in _valid_dtypes:
+            raise ValueError(
+                f"Unknown checkpoint_dtype={checkpoint_dtype!r}. Must be one of {_valid_dtypes}"
+            )
         self.checkpoint_dtype = checkpoint_dtype
         self.sparse_checkpoints_dir = self.log_dir / "sparse_checkpoints"
         if save_sparse_checkpoints:
