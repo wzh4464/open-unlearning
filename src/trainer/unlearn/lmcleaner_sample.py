@@ -104,6 +104,11 @@ class LMCleanerSampleLevel(UnlearnTrainer):
         self.delta = delta
 
         # Multi forget-step execution strategy
+        _valid_modes = {"sum_then_apply", "sequential_apply"}
+        if apply_mode not in _valid_modes:
+            raise ValueError(
+                f"Unknown apply_mode={apply_mode!r}. Must be one of {_valid_modes}"
+            )
         self.apply_mode = apply_mode
 
         # HVP配置
@@ -364,6 +369,7 @@ class LMCleanerSampleLevel(UnlearnTrainer):
                         v_total = v.clone()
                     else:
                         v_total.add_(v)
+                    del v  # Release per-sample correction to reduce peak memory
                     logger.info(
                         f"Accumulated correction for sample at step {tz}: "
                         f"v_norm={audit['v_norm']:.6f}, "
@@ -372,6 +378,7 @@ class LMCleanerSampleLevel(UnlearnTrainer):
                 else:
                     # Legacy sequential apply
                     apply_correction(v, params)
+                    del v  # Release after applying
                     logger.info(
                         f"Applied correction for sample at step {tz}: "
                         f"v_norm={audit['v_norm']:.6f}, "

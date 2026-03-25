@@ -123,6 +123,11 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         self.use_historical_params = use_historical_params
 
         # Multi forget-step execution strategy
+        _valid_modes = {"sum_then_apply", "sequential_apply"}
+        if apply_mode not in _valid_modes:
+            raise ValueError(
+                f"Unknown apply_mode={apply_mode!r}. Must be one of {_valid_modes}"
+            )
         self.apply_mode = apply_mode
 
         # HVP配置
