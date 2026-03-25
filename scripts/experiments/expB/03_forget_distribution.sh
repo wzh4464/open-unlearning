@@ -4,7 +4,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.sh"
-source "$(dirname "$SCRIPT_DIR")/../../env.sh"
+source "$(dirname "$SCRIPT_DIR")/../env.sh"
 
 OUTPUT_DIR="${SAVES_BASE}/experiments/expB/stats"
 mkdir -p "$OUTPUT_DIR"

@@ -14,7 +14,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/config.sh"
-source "$(dirname "$SCRIPT_DIR")/../../env.sh"
+source "$(dirname "$SCRIPT_DIR")/../env.sh"
 
 STEP=""
 while [[ $# -gt 0 ]]; do
