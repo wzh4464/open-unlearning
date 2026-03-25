@@ -222,13 +222,15 @@ class FinetuneTrainer(Trainer):
                 for p in group["params"]:
                     if p.grad is not None:
                         grad = p.grad
+                        if grad.is_sparse:
+                            grad = grad.to_dense()
                         # SGD with weight_decay applies: p.grad += weight_decay * p
                         # so effective update is -lr * (grad + weight_decay * p)
                         if weight_decay != 0.0:
                             p_detached = p.detach()
-                            update = -(grad + weight_decay * p_detached).view(-1)
+                            update = -(grad + weight_decay * p_detached).reshape(-1)
                         else:
-                            update = (-grad).view(-1)
+                            update = (-grad).reshape(-1)
                         parts.append((lr * update).to(torch.bfloat16).cpu())
                     else:
                         # Parameter has no gradient; its update is zero

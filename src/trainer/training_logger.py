@@ -914,8 +914,10 @@ class TrainingLogger:
             with open(meta_path, "wb") as f:
                 pickle.dump(meta_dict, f)
 
+        write_mode = "async" if self._async_write else "sync"
         logger.info(
-            f"Queued {len(new_records)} u[t] for async write at step {step_id}"
+            f"Saved {len(new_records)} records at step {step_id} "
+            f"(u[t]: {write_mode}, metadata: sync)"
         )
 
         # 更新已保存的最后一个 step_id
