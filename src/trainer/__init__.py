@@ -201,11 +201,21 @@ def load_trainer(
                 "Skipping SpectralNormCallback initialization on non-main process"
             )
 
+    # Transformers >= 5.0 renamed 'tokenizer' to 'processing_class'
+    # Check against the base HF Trainer, not the subclass (which uses **kwargs)
+    import inspect
+    from transformers import Trainer as _HFTrainer
+    hf_trainer_params = inspect.signature(_HFTrainer.__init__).parameters
+    if "processing_class" in hf_trainer_params:
+        tokenizer_kwarg = {"processing_class": tokenizer}
+    else:
+        tokenizer_kwarg = {"tokenizer": tokenizer}
+
     trainer = trainer_cls(
         model=model,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
-        tokenizer=tokenizer,
+        **tokenizer_kwarg,
         data_collator=data_collator,
         args=trainer_args,
         evaluators=evaluators,
