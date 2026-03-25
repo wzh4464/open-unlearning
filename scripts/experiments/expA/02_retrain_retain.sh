@@ -40,6 +40,7 @@ $PYTHON_CMD src/train.py --config-name=train.yaml \
     trainer.args.gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} \
     trainer.args.gradient_checkpointing=true \
     trainer.args.seed=${SEED} \
+    ++trainer.args.optim=sgd \
     ++trainer.args.bf16=true \
     ++trainer.args.save_strategy=epoch \
     ++trainer.args.efficiency_tracking.enabled=true

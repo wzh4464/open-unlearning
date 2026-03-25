@@ -28,6 +28,7 @@ GRADIENT_ACCUMULATION_STEPS=8
 STEPS_PER_EPOCH=63  # 4000 samples / effective_batch_64
 LEARNING_RATE="1e-5"
 WEIGHT_DECAY="0.01"
+OPTIMIZER="sgd"
 WARMUP_EPOCHS="0.1"  # 10% warmup for single-epoch training
 
 # ============================================

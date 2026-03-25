@@ -543,6 +543,9 @@ class TrainingLogger:
             diag_H: 对角Hessian(可选)
             sample_indices: 样本索引列表(轻存储模式)
         """
+        # Track whether u was provided externally (e.g. from SGD optimizer hook)
+        u_provided_externally = u is not None
+
         # 计算参数更新向量u[t] = θ[t+1] - θ[t]
         # Note: Skip parameter cloning with DeepSpeed ZeRO-3 as parameters are sharded
         if u is None and model is not None and self.prev_params is not None:
@@ -617,8 +620,9 @@ class TrainingLogger:
 
         # 保存当前参数用于下一步
         # Note: Skip with DeepSpeed ZeRO-3 as parameters are sharded
-        # Skip if already updated in fast-path u[t] computation above
-        if model is not None:
+        # Skip entirely when u was provided externally (e.g. SGD hook) --
+        # no need to clone parameters since we never diff them.
+        if model is not None and not u_provided_externally:
             try:
                 self.prev_params = clone_parameters(model)
             except Exception as e:

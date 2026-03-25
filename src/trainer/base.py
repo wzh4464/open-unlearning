@@ -14,6 +14,7 @@ from typing import Any
 
 try:
     import psutil
+
     PSUTIL_AVAILABLE = True
 except ImportError:
     PSUTIL_AVAILABLE = False
@@ -74,7 +75,9 @@ class MemoryPressureCallback(TrainerCallback):
                         # Field 11 (0-indexed) is ios_in_progress
                         # Only count real disks (not partitions - those have numbers at end)
                         device_name = parts[2]
-                        if not device_name[-1].isdigit() or device_name.startswith("nvme"):
+                        if not device_name[-1].isdigit() or device_name.startswith(
+                            "nvme"
+                        ):
                             ios_in_progress = int(parts[11])
                             total_ios += ios_in_progress
             return total_ios
@@ -145,6 +148,11 @@ class FinetuneTrainer(Trainer):
         if training_logger is not None:
             self.add_callback(EpochEndCallback(training_logger))
 
+            # Register optimizer step pre-hook to capture u[t] = -η * g for SGD
+            # This avoids expensive clone_parameters (GPU→CPU copy of entire model)
+            self._sgd_hook_handle = None
+            self._register_sgd_gradient_hook()
+
         # Add memory pressure callback (set threshold to 0 or None to disable)
         if memory_pressure_threshold and memory_pressure_threshold > 0:
             self.add_callback(
@@ -153,6 +161,76 @@ class FinetuneTrainer(Trainer):
                     io_queue_threshold=io_queue_threshold,
                 )
             )
+
+    def _register_sgd_gradient_hook(self):
+        """Register an optimizer step pre-hook that captures u[t] = -lr * grad for SGD.
+
+        The hook fires right before optimizer.step(), so gradients are still
+        available.  For plain SGD (no momentum), u[t] = -eta * g exactly.
+        The result is stored on ``self.training_logger._pending_u`` as a
+        flattened bf16 CPU tensor so that ``register_step`` can consume it
+        without ever calling ``clone_parameters``.
+
+        For non-SGD optimizers (e.g. AdamW) the hook is not installed and the
+        existing clone_parameters fallback remains in effect.
+        """
+        if self.training_logger is None:
+            return
+
+        # Defer actual registration until optimizer is created (create_optimizer
+        # is called lazily by HF Trainer).  We override create_optimizer below.
+        # But first check if the optimizer already exists (it shouldn't at
+        # __init__ time, but be safe).
+        if self.optimizer is not None:
+            self._try_install_sgd_hook()
+
+    def _try_install_sgd_hook(self):
+        """Install the pre-hook if the optimizer is SGD-family."""
+        if self.training_logger is None or self.optimizer is None:
+            return
+        if self._sgd_hook_handle is not None:
+            return  # Already installed
+
+        optim_cls_name = type(self.optimizer).__name__.lower()
+        if "sgd" not in optim_cls_name:
+            logger.info(
+                f"Optimizer is {type(self.optimizer).__name__}, not SGD. "
+                "Using clone_parameters fallback for u[t] computation."
+            )
+            return
+
+        def _capture_u_from_grad(optimizer, args, kwargs):
+            """Optimizer step pre-hook: capture u[t] = -lr * grad (bf16, CPU)."""
+            parts = []
+            for group in optimizer.param_groups:
+                lr = group["lr"]
+                weight_decay = group.get("weight_decay", 0.0)
+                for p in group["params"]:
+                    if p.grad is not None:
+                        grad = p.grad
+                        # SGD with weight_decay applies: p.grad += weight_decay * p
+                        # so effective update is -lr * (grad + weight_decay * p)
+                        if weight_decay != 0.0:
+                            update = -(grad + weight_decay * p.data).view(-1)
+                        else:
+                            update = (-grad).view(-1)
+                        parts.append((lr * update).to(torch.bfloat16).cpu())
+                    else:
+                        # Parameter has no gradient; its update is zero
+                        parts.append(torch.zeros(p.numel(), dtype=torch.bfloat16))
+            if parts:
+                self.training_logger._pending_u = torch.cat(parts)
+
+        self._sgd_hook_handle = self.optimizer.register_step_pre_hook(
+            _capture_u_from_grad
+        )
+        logger.info("Installed SGD optimizer pre-hook for zero-copy u[t] computation.")
+
+    def create_optimizer(self):
+        """Override to install SGD gradient hook after optimizer creation."""
+        result = super().create_optimizer()
+        self._try_install_sgd_hook()
+        return result
 
     def evaluate(
         self,
@@ -178,7 +256,11 @@ class FinetuneTrainer(Trainer):
                             "output_dir": output_dir,
                             "template_args": self.template_args,
                             "model": self.model,
-                            "tokenizer": getattr(self, "processing_class", getattr(self, "tokenizer", None)),
+                            "tokenizer": getattr(
+                                self,
+                                "processing_class",
+                                getattr(self, "tokenizer", None),
+                            ),
                         }
                         eval_metrics.update(evaluator.evaluate(**eval_args))
                     self.log(eval_metrics)
@@ -195,8 +277,11 @@ class FinetuneTrainer(Trainer):
 
     def training_step(self, model, inputs, num_items_in_batch=None):
         """Override training_step to log training data if TrainingLogger is enabled"""
-        # Save model state before training step (for computing u[t])
-        if self.training_logger is not None:
+        # Save model state before training step (for computing u[t]) -- only
+        # needed when the SGD gradient hook is NOT active (i.e. non-SGD
+        # optimizers that fall back to clone_parameters).
+        _has_sgd_hook = getattr(self, "_sgd_hook_handle", None) is not None
+        if self.training_logger is not None and not _has_sgd_hook:
             # Let the logger track the model state before the step
             # Note: Skip with DeepSpeed ZeRO-3 as parameters are sharded
             if self.training_logger.prev_params is None:
@@ -260,11 +345,17 @@ class FinetuneTrainer(Trainer):
                 except Exception as e:
                     logger.debug(f"Failed to compute diagonal Hessian: {e}. Skipping.")
 
+            # Retrieve u[t] from the SGD optimizer pre-hook (if available)
+            u = getattr(self.training_logger, "_pending_u", None)
+            if u is not None:
+                self.training_logger._pending_u = None
+
             # Register the step
             self.training_logger.register_step(
                 step_id=step_id,
                 batch_id=step_id,  # Use step_id as batch_id for now
                 eta=eta,
+                u=u,
                 model=model,
                 batch_data=batch_data,
                 diag_H=diag_H,
