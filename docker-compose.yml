@@ -2,21 +2,13 @@ services:
   open-unlearning:
     build:
       context: .
-    privileged: true
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - HF_TOKEN=${HF_TOKEN}
       - SSH_PRIVATE_KEY=${SSH_PRIVATE_KEY}
     volumes:
       - ./workspace:/workspace
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
     ports:
       - "6006:6006"
     stdin_open: true
