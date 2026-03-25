@@ -36,16 +36,18 @@ For bfloat16: ~2.4 GB extra.
 
 ## How It Works
 
+The logic is encapsulated in `HistoricalParamContext` (a context manager in `lmcleaner_core.py`). `compute_correction()` delegates all parameter state management to it.
+
 When `use_historical_params=True` and u[t] vectors are available in the training log:
 
-1. Save current parameters as `θ[τ]`
-2. Reconstruct `θ[start]` = `θ[τ] - Σ_{t=start}^{τ-1} u[t]`
-3. For each propagation step `s`:
-   - Model is at `θ[s]` → compute HVP here
-   - Advance: `θ[s+1] = θ[s] + u[s]`
-4. Restore `θ[τ]` after propagation
+1. **`__init__`**: Load u vectors for the propagation window `[start, end]`, then stream-accumulate the tail `[end+1, τ-1]` to compute `θ[start] = θ[τ] - Σ_{t=start}^{τ-1} u[t]`
+2. **`__enter__`**: Set model parameters to `θ[start]`
+3. **Propagation loop**: For each step `s`, `compute_correction()` calls `hvp_apply()` (model is at `θ[s]`), then calls `ctx.advance(s)` which sets model to `θ[s+1] = θ[s] + u[s]`
+4. **`__exit__`**: Restore `θ[τ]` — guaranteed even on exceptions
 
-When u[t] vectors are not available (e.g., training log only saved indices), it automatically falls back to using `θ[τ]`.
+When u[t] vectors are not available (e.g., training log only saved indices), or when `use_historical_params=False`, the context manager acts as a no-op and HVP is computed at `θ[τ]`.
+
+The `AuditRecord` includes a `used_historical_params` field to track whether historical reconstruction was actually used for each forget step.
 
 ## Configuration
 

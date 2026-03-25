@@ -35,14 +35,20 @@ Contains the fundamental building blocks:
 - **`HVPConfig`**: Configuration for Hessian-Vector Product computation
 - **`StepRecord`**: Records training step information
 - **`StepLog`**: Ring buffer for storing recent K steps
-- **`AuditRecord`**: Audit trail for unlearning operations
+- **`AuditRecord`**: Audit trail for unlearning operations (includes `used_historical_params` field)
+- **`HistoricalParamContext`**: Context manager for historical parameter reconstruction
+  - Reconstructs θ[s] = θ[τ] - Σ u[t] using stored update vectors
+  - Advances through θ[s] → θ[s+1] → ... during propagation
+  - Guarantees θ[τ] restoration on exit (even on exceptions)
+  - No-op when disabled or u[t] vectors unavailable (falls back to θ[τ])
 - **`hvp_apply()`**: Computes H @ v using various methods:
   - `GGN`: Generalized Gauss-Newton (recommended for cross-entropy)
   - `diag`: Diagonal approximation (fast but rough)
   - `exact`: Full second-order autograd (expensive)
   - `low_rank`: Low-rank approximation (TODO)
-- **`compute_correction()`**: Forward K-step propagation algorithm
+- **`compute_correction()`**: Forward K-step propagation algorithm (delegates parameter management to `HistoricalParamContext`)
 - **`apply_correction()`**: Applies correction vector to parameters
+- **`_set_flat_params()` / `_get_flat_params()`**: Module-level utilities for flattened parameter I/O
 
 #### 2. Training Logger (`training_logger.py`)
 
