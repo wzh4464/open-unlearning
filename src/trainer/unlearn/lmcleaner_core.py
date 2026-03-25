@@ -55,6 +55,8 @@ class AuditRecord(dict):
     noise_injected: bool = False  # 是否注入了隐私噪声
     epsilon: float = 0.0  # (ε,δ)-certified unlearning 的 ε
     delta: float = 0.0  # (ε,δ)-certified unlearning 的 δ
+    # 历史参数重建
+    used_historical_params: bool = False  # 是否实际使用了历史 θ[s]
 
     def __post_init__(self):
         # 使其可以像字典一样使用
@@ -71,6 +73,7 @@ class AuditRecord(dict):
             noise_injected=self.noise_injected,
             epsilon=self.epsilon,
             delta=self.delta,
+            used_historical_params=self.used_historical_params,
         )
 
 
@@ -440,6 +443,27 @@ def hvp_diagonal(
     return diag_H_full * v
 
 
+@torch.no_grad()
+def _set_flat_params(model: nn.Module, flat_params: torch.Tensor) -> None:
+    """Set model parameters from a flattened vector (in-place)."""
+    offset = 0
+    for p in model.parameters():
+        if p.requires_grad:
+            n = p.numel()
+            p.copy_(flat_params[offset : offset + n].view_as(p))
+            offset += n
+    if offset != flat_params.numel():
+        raise ValueError(
+            f"Flat params size mismatch: consumed {offset}, got {flat_params.numel()}"
+        )
+
+
+@torch.no_grad()
+def _get_flat_params(model: nn.Module) -> torch.Tensor:
+    """Get model parameters as a flattened, detached vector."""
+    return torch.cat([p.detach().reshape(-1) for p in model.parameters() if p.requires_grad])
+
+
 def hvp_apply(
     v: torch.Tensor,
     step_rec: StepRecord,
@@ -451,15 +475,15 @@ def hvp_apply(
     """
     应用HVP计算: 返回 H[s] @ v
 
-    注意: 当前实现使用当前模型参数 θ[τ] 计算 HVP，而非历史参数 θ[s]。
-    这是一个实现简化，可能在 τ - s 很大时引入额外误差。
-    论文的理论分析 (Proposition 1) 假设使用 θ[s] 处的 Hessian。
+    根据论文 Algorithm 1, HVP 应在历史参数 θ[s] 处计算。
+    调用方 (compute_correction) 负责在调用前将模型参数设置为 θ[s],
+    调用后恢复为 θ[τ]。
 
     Args:
         v: 输入向量
         step_rec: 步骤记录
         cfg: HVP配置
-        model: 模型 (注意: 使用当前参数，非历史参数)
+        model: 模型 (调用方应确保参数已设置为历史 θ[s])
         loss_fn: 损失函数
         batch_reconstructor: 批次重建器(当batch_data为None时使用)
 
@@ -602,6 +626,8 @@ def compute_correction(
     # On-demand loading support for large K values
     lazy_loader: Optional[LazyLoaderProtocol] = None,
     initial_record: Optional[StepRecord] = None,
+    # Historical parameter reconstruction
+    use_historical_params: bool = True,
 ) -> Tuple[torch.Tensor, AuditRecord]:
     """
     计算参数校正向量(前向K步传播) - 论文 Algorithm 1 完整实现
@@ -609,8 +635,22 @@ def compute_correction(
     算法:
     Phase 1: 计算初始偏差 v0 = -u[tz] 或 v0 = η[tz] * gbar[tz]
     Phase 2: 前向传播 v[s+1] = v[s] - η[s] * (H[s] @ v[s]) - η[s] * λ * v[s]
+             其中 H[s] 在历史参数 θ[s] 处计算 (论文 Algorithm 1 Line 6)
     Phase 3: 返回校正向量 v (将在外部应用: θ ← θ + v)
     Phase 4: 可选的隐私噪声注入
+
+    历史参数重建 (论文 Section 5 - Parameter Snapshots):
+        θ[s] = θ[τ] - Σ_{t=s}^{τ-1} u[t]
+        其中 u[t] = θ[t+1] - θ[t] 是每步的参数更新向量。
+        当 use_historical_params=True 且 u[t] 向量可用时，在每步传播前
+        将模型参数临时设为 θ[s], 计算 HVP 后恢复为 θ[τ]。
+        当 u[t] 不可用或 use_historical_params=False 时，使用 θ[τ]。
+
+    ! 注意 (内存开销):
+    !   启用 use_historical_params 会额外占用约 1x 模型参数量的 GPU 显存
+    !   (用于维护 theta_current flat 向量) 以及读取窗口内 u[t] 的 IO 开销。
+    !   对于显存紧张的环境，可设置 use_historical_params=False 退化为旧行为。
+    !   详见 docs/historical_params_hvp.md
 
     注意 (与论文的差异):
     - 阻尼项 λ 是实现添加的数值稳定化技术，论文理论分析未包含
@@ -630,6 +670,9 @@ def compute_correction(
         delta_det: 近似误差上界 (如果为 None, 使用 ||v||₂ 作为估计)
         lazy_loader: 懒加载器，用于大 K 值时按需加载记录 (避免 OOM)
         initial_record: 初始步骤记录 (tz 对应的记录，用于 Phase 1)
+        use_historical_params: 是否在历史参数 θ[s] 处计算 HVP (默认 True)
+            True: 论文 Algorithm 1 的精确实现，额外 ~1x 模型参数量显存
+            False: 在 θ[τ] 处计算 HVP，节省显存但引入近似误差
 
     Returns:
         (v, audit_record): 校正向量和审计记录
@@ -687,6 +730,109 @@ def compute_correction(
     else:
         eta_map = None
 
+    # --- 历史参数重建准备 ---
+    # 收集窗口内步骤的 u[t] 向量用于重建 θ[s]
+    # θ[s] = θ[τ] - Σ_{t=s}^{τ-1} u[t]
+    # 策略: 预加载 [start, tau-1] 窗口内的所有 u[t] 向量到内存，
+    # 然后计算 θ[start] 并在传播循环中通过 θ[s+1] = θ[s] + u[s] 逐步递推。
+    # 维护一个 flat 参数向量 theta_current 避免每步都 get/set 模型参数。
+    # 仅在 HVP 计算前后写回模型参数。
+
+    # 获取模型参数所在的 device (与 cfg.device 可能不同)
+    model_device = next(model.parameters()).device
+
+    # 首先判断是否能使用历史参数 (受 use_historical_params 参数控制)
+    _do_historical = False  # 最终决定 (需要 flag=True 且 u[t] 可用)
+    # 只收集传播窗口 [start, end] 内的 u 向量 (用于逐步推进 θ[s])
+    u_vectors: Dict[int, torch.Tensor] = {}
+
+    # 辅助函数: 加载单步的 u 向量
+    def _load_u(t: int) -> Optional[torch.Tensor]:
+        if use_lazy_loading and lazy_loader is not None:
+            rec_dict = lazy_loader.load_single_step(t, include_tensors=True)
+            if rec_dict is not None:
+                u_val = rec_dict.get("u")
+                del rec_dict
+                return u_val
+        elif step_log is not None:
+            srec_tmp = step_log[t]
+            if srec_tmp is not None:
+                return srec_tmp.u
+        return None
+
+    if K_used > 0 and use_historical_params:
+        # Phase A: 收集传播窗口 [start, end] 内的 u 向量
+        _missing_u = False
+        for t in range(start, end + 1):
+            u_t = _load_u(t)
+            if u_t is not None:
+                u_vectors[t] = u_t.to(model_device)
+            else:
+                _missing_u = True
+                break
+
+        if _missing_u:
+            u_vectors.clear()
+            logger.warning(
+                "Cannot reconstruct historical parameters: u[t] vectors not available "
+                f"for all steps in [{start}, {end}]. "
+                "Falling back to current parameters θ[τ] for HVP."
+            )
+        else:
+            # Phase B: 计算 θ[start] = θ[τ] - Σ_{t=start}^{τ-1} u[t]
+            # 对于窗口之后 [end+1, tau-1] 的 u 向量，流式累加后丢弃，不存储
+            _tail_ok = True
+            _tail_sum: Optional[torch.Tensor] = None
+            for t in range(end + 1, tau):
+                u_t = _load_u(t)
+                if u_t is None:
+                    _tail_ok = False
+                    break
+                u_t = u_t.to(model_device)
+                if _tail_sum is None:
+                    _tail_sum = u_t.clone()
+                else:
+                    _tail_sum += u_t
+                del u_t
+
+            if _tail_ok:
+                _do_historical = True
+                logger.debug(
+                    f"Historical parameter reconstruction enabled for steps [{start}, {end}] "
+                    f"(loaded {len(u_vectors)} u vectors for propagation)"
+                )
+            else:
+                u_vectors.clear()
+                logger.warning(
+                    "Cannot reconstruct historical parameters: u[t] vectors not available "
+                    f"for tail steps in [{end + 1}, {tau - 1}]. "
+                    "Falling back to current parameters θ[τ] for HVP."
+                )
+    elif K_used > 0 and not use_historical_params:
+        logger.debug("Historical parameter reconstruction disabled by user")
+
+    # 如果使用历史参数，先保存当前参数 θ[τ] 并计算 θ[start]
+    # 维护 theta_current 作为 flat 向量，避免每步重复 get/set
+    theta_tau: Optional[torch.Tensor] = None
+    theta_current: Optional[torch.Tensor] = None
+    if _do_historical:
+        theta_tau = _get_flat_params(model).clone()
+        # θ[start] = θ[τ] - Σ_{t=start}^{end} u[t] - Σ_{t=end+1}^{τ-1} u[t]
+        theta_current = theta_tau.clone()
+        for t in range(start, end + 1):
+            theta_current -= u_vectors[t]
+        if _tail_sum is not None:
+            theta_current -= _tail_sum
+        del _tail_sum
+        _set_flat_params(model, theta_current)
+
+    # Helper: advance θ[s] -> θ[s+1] via theta_current += u[s]
+    def _advance_theta(s: int) -> None:
+        nonlocal theta_current
+        if _do_historical and theta_current is not None and s in u_vectors:
+            theta_current += u_vectors[s]
+            _set_flat_params(model, theta_current)
+
     for s in range(start, end + 1):
         # 获取步骤记录
         if use_lazy_loading and lazy_loader is not None:
@@ -696,6 +842,7 @@ def compute_correction(
                 # 使用预加载的 eta_map，无需加载完整记录
                 if s not in eta_map:
                     logger.warning(f"Step {s} eta not found, skipping")
+                    _advance_theta(s)
                     continue
                 # 创建轻量级 StepRecord，只包含 HVP 计算所需的最小信息
                 srec = StepRecord(
@@ -712,6 +859,7 @@ def compute_correction(
                 rec_dict = lazy_loader.load_single_step(s, include_tensors=True)
                 if rec_dict is None:
                     logger.warning(f"Step {s} not found, skipping")
+                    _advance_theta(s)
                     continue
                 srec = StepRecord(
                     step_id=rec_dict["step_id"],
@@ -727,7 +875,11 @@ def compute_correction(
             srec = step_log[s] if step_log else None
             if srec is None:
                 logger.warning(f"Step {s} not found, skipping")
+                _advance_theta(s)
                 continue
+
+        # 此时模型参数已是 θ[s] (如果 _do_historical)
+        # 或者是 θ[τ] (fallback)
 
         # 计算 H[s] @ v
         with torch.enable_grad():
@@ -745,6 +897,9 @@ def compute_correction(
 
         hvp_calls += 1
 
+        # 推进到 θ[s+1]
+        _advance_theta(s)
+
         # 清理当前记录 (lazy loading 模式)
         if use_lazy_loading:
             del srec, hvp
@@ -752,6 +907,13 @@ def compute_correction(
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+
+    # 恢复模型参数为 θ[τ]
+    if _do_historical and theta_tau is not None:
+        _set_flat_params(model, theta_tau)
+        del theta_tau, theta_current
+        # 清理 u 向量
+        u_vectors.clear()
 
     # 记录 Phase 3 前的 v_norm
     v_norm_before_noise = float(v.norm().item())
@@ -798,6 +960,7 @@ def compute_correction(
         noise_injected=noise_injected,
         epsilon=epsilon if noise_injected else 0.0,
         delta=delta if noise_injected else 0.0,
+        used_historical_params=_do_historical,
     )
 
     return v, audit
