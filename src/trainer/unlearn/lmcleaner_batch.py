@@ -147,6 +147,11 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # 审计记录列表
         self.audit_records: List[AuditRecord] = []
 
+        # Unlearning-phase efficiency metrics (populated by _apply_unlearning)
+        self.unlearning_total_time_seconds: float = 0.0
+        self.unlearning_peak_gpu_mb: float = 0.0
+        self.num_affected_batches: int = 0
+
         # 是否已应用遗忘
         self.unlearning_applied = False
 
@@ -297,8 +302,14 @@ class LMCleanerBatchLevel(UnlearnTrainer):
 
         params = [p for p in self.model.parameters() if p.requires_grad]
 
-        logger.info(f"Applying unlearning for {len(forget_steps)} batches")
+        self.num_affected_batches = len(forget_steps)
+        logger.info(f"Applying unlearning for {self.num_affected_batches} batches")
         logger.info(f"Target step (tau): {tau}, K: {self.K}")
+
+        # Track unlearning-phase GPU memory and total time
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats()
+        _unlearn_start = time.perf_counter()
 
         # Create historical parameter provider
         historical_param_provider = None
@@ -389,11 +400,21 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         if historical_param_provider is not None:
             historical_param_provider.cleanup()
 
+        # Finalize unlearning-phase metrics
+        self.unlearning_total_time_seconds = time.perf_counter() - _unlearn_start
+        if torch.cuda.is_available():
+            self.unlearning_peak_gpu_mb = torch.cuda.max_memory_allocated() / (1024**2)
+
         if self.audit_dir:
             self._save_audit_records()
 
         self.unlearning_applied = True
-        logger.info("Unlearning applied successfully")
+        logger.info(
+            f"Unlearning applied successfully: "
+            f"{self.num_affected_batches} batches, "
+            f"{self.unlearning_total_time_seconds:.1f}s, "
+            f"peak GPU {self.unlearning_peak_gpu_mb:.0f} MB"
+        )
 
     def _save_audit_records(self):
         """保存审计记录到磁盘"""
