@@ -3,7 +3,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 source "${SCRIPT_DIR}/config.sh"
+cd "${PROJECT_ROOT}"
 
 echo "=============================================="
 echo "ExpA Step 6: MIA + Privacy Evaluation"

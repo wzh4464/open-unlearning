@@ -3,7 +3,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 source "${SCRIPT_DIR}/config.sh"
+cd "${PROJECT_ROOT}"
 
 TASK_NAME=$(get_unlearn_task_name "lmcleaner")
 OUTPUT_DIR=$(get_unlearn_output_dir "lmcleaner")

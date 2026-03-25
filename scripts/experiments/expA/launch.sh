@@ -9,36 +9,29 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 cd "${PROJECT_ROOT}"
 mkdir -p "${RESULTS_DIR}"
 
-MODEL_SHARD="${BASE_MODEL_PATH}/model-00001-of-00002.safetensors"
-EXPECTED_SIZE_MB=9000  # ~9.29GB
-
-MAX_WAIT_SEC=3600  # Timeout after 1 hour
-ELAPSED=0
-
-echo "Waiting for model download to complete (timeout: ${MAX_WAIT_SEC}s)..."
-echo "Checking: ${MODEL_SHARD}"
-
-while true; do
-    if [ -f "${MODEL_SHARD}" ]; then
-        SIZE_MB=$(du -m "${MODEL_SHARD}" 2>/dev/null | cut -f1)
-        if [ "${SIZE_MB}" -gt "${EXPECTED_SIZE_MB}" ]; then
-            echo "Model shard complete: ${SIZE_MB}MB"
-            break
-        fi
-        echo "  Model shard: ${SIZE_MB}MB / ~9290MB ... (${ELAPSED}s elapsed)"
-    else
-        echo "  Waiting for model shard file to appear... (${ELAPSED}s elapsed)"
-    fi
-    if [ "${ELAPSED}" -ge "${MAX_WAIT_SEC}" ]; then
-        echo "ERROR: Model download timed out after ${MAX_WAIT_SEC}s"
+# Verify model is accessible (works for both HF model IDs and local paths)
+if [[ "${BASE_MODEL_PATH}" == */* ]] && [ ! -d "${BASE_MODEL_PATH}" ]; then
+    # HF model ID (e.g., "unsloth/Llama-3.2-3B-Instruct") — verify it's downloadable
+    echo "Verifying HF model: ${BASE_MODEL_PATH}"
+    if ! $PYTHON_CMD -c "from transformers import AutoConfig; AutoConfig.from_pretrained('${BASE_MODEL_PATH}')" 2>/dev/null; then
+        echo "ERROR: Cannot access HF model '${BASE_MODEL_PATH}'. Check model ID and network."
         exit 1
     fi
-    sleep 30
-    ELAPSED=$((ELAPSED + 30))
-done
+    echo "HF model verified: ${BASE_MODEL_PATH}"
+elif [ -d "${BASE_MODEL_PATH}" ]; then
+    # Local path — check that config.json exists
+    if [ ! -f "${BASE_MODEL_PATH}/config.json" ]; then
+        echo "ERROR: Local model missing config.json at ${BASE_MODEL_PATH}"
+        exit 1
+    fi
+    echo "Local model verified: ${BASE_MODEL_PATH}"
+else
+    echo "ERROR: Model not found: ${BASE_MODEL_PATH}"
+    exit 1
+fi
 
 echo ""
-echo "Model download complete! Starting experiments..."
+echo "Model verified! Starting experiments..."
 echo ""
 
 # Run all experiments

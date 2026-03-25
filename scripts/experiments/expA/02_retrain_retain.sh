@@ -6,7 +6,9 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 source "${SCRIPT_DIR}/config.sh"
+cd "${PROJECT_ROOT}"
 
 echo "=============================================="
 echo "ExpA Step 2: Retrain ${MODEL_NAME} on retain90 only"
