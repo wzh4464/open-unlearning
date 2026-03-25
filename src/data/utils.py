@@ -61,6 +61,9 @@ def preprocess_chat_instance(
         chat_ids = tokenizer.apply_chat_template(
             chat, tokenize=True, add_generation_prompt=False, **date_info
         )
+        # Ensure list (transformers >= 5.0 may return BatchEncoding)
+        if not isinstance(chat_ids, list):
+            chat_ids = chat_ids["input_ids"] if hasattr(chat_ids, "__getitem__") else list(chat_ids)
         # all except last response are in-context examples
         wrapped_prompt = tokenizer.apply_chat_template(
             chat[:-1], tokenize=False, add_generation_prompt=True, **date_info
@@ -68,6 +71,8 @@ def preprocess_chat_instance(
         prompt_ids = tokenizer.apply_chat_template(
             chat[:-1], tokenize=True, add_generation_prompt=True, **date_info
         )
+        if not isinstance(prompt_ids, list):
+            prompt_ids = prompt_ids["input_ids"] if hasattr(prompt_ids, "__getitem__") else list(prompt_ids)
     else:
         wrapped_prompt = ""
         system_prompt_with_special_tokens = template_config.get(

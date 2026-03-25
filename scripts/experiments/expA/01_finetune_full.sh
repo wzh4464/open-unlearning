@@ -11,7 +11,7 @@ echo "ExpA Step 1: Finetune ${MODEL_NAME} on TOFU (1 epoch)"
 echo "=============================================="
 print_config
 
-# Verify base model exists (skip check for HF model IDs)
+# Verify base model exists (skip check for HF model IDs like org/name)
 if [[ "${BASE_MODEL_PATH}" != */* ]] && [ ! -d "${BASE_MODEL_PATH}" ]; then
     echo "ERROR: Base model not found at ${BASE_MODEL_PATH}"
     exit 1

@@ -13,7 +13,7 @@ echo "ExpA Step 2: Retrain ${MODEL_NAME} on retain90 only"
 echo "=============================================="
 print_config
 
-# Verify base model (skip check for HF model IDs)
+# Verify base model (skip check for HF model IDs like org/name)
 if [[ "${BASE_MODEL_PATH}" != */* ]] && [ ! -d "${BASE_MODEL_PATH}" ]; then
     echo "ERROR: Base model not found at ${BASE_MODEL_PATH}"
     exit 1

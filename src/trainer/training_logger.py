@@ -548,7 +548,6 @@ class TrainingLogger:
         if u is None and model is not None and self.prev_params is not None:
             try:
                 current_params = clone_parameters(model)
-                # Check if parameters are valid (not empty due to ZeRO-3 sharding)
                 if current_params and len(current_params) == len(self.prev_params):
                     u = torch.cat(
                         [
@@ -618,6 +617,7 @@ class TrainingLogger:
 
         # 保存当前参数用于下一步
         # Note: Skip with DeepSpeed ZeRO-3 as parameters are sharded
+        # Skip if already updated in fast-path u[t] computation above
         if model is not None:
             try:
                 self.prev_params = clone_parameters(model)
