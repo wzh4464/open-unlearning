@@ -859,7 +859,10 @@ class HistoricalParamProvider:
                 if name in state_dict:
                     flat_parts.append(state_dict[name].reshape(-1).float())
                 else:
-                    # Fallback: use current param
+                    logger.warning(
+                        f"Checkpoint at step {checkpoint_step} missing key '{name}', "
+                        "using current model parameter (may skew reconstruction)"
+                    )
                     flat_parts.append(param.detach().cpu().reshape(-1).float())
         return torch.cat(flat_parts)
 
