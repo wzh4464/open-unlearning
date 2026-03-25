@@ -188,8 +188,10 @@ class FinetuneTrainer(Trainer):
         """Install the pre-hook if the optimizer is SGD-family."""
         if self.training_logger is None or self.optimizer is None:
             return
+        # Remove old hook if optimizer was recreated
         if self._sgd_hook_handle is not None:
-            return  # Already installed
+            self._sgd_hook_handle.remove()
+            self._sgd_hook_handle = None
 
         if not isinstance(self.optimizer, torch.optim.SGD):
             logger.info(

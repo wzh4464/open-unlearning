@@ -28,7 +28,7 @@ import logging
 import pickle
 import threading
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from typing import Dict, Optional, Any, List
 import weakref
 
@@ -425,8 +425,8 @@ class TrainingLogger:
         while not self._stop_writer.is_set():
             try:
                 task = self._write_queue.get(timeout=0.5)
-            except Exception:
-                continue  # Timeout or stop event, retry
+            except Empty:
+                continue  # Timeout, retry
             if task is None:  # 停止信号
                 break
             try:
