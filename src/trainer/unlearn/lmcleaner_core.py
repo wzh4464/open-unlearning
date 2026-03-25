@@ -775,6 +775,13 @@ def compute_correction(
             theta_current -= u_vectors[t]
         _set_flat_params(model, theta_current)
 
+    # Helper: advance θ[s] -> θ[s+1] via theta_current += u[s]
+    def _advance_theta(s: int) -> None:
+        nonlocal theta_current
+        if use_historical_params and theta_current is not None and s in u_vectors:
+            theta_current += u_vectors[s]
+            _set_flat_params(model, theta_current)
+
     for s in range(start, end + 1):
         # 获取步骤记录
         if use_lazy_loading and lazy_loader is not None:
@@ -784,10 +791,7 @@ def compute_correction(
                 # 使用预加载的 eta_map，无需加载完整记录
                 if s not in eta_map:
                     logger.warning(f"Step {s} eta not found, skipping")
-                    # 如果使用历史参数，仍需推进到 θ[s+1]
-                    if use_historical_params and s in u_vectors:
-                        theta_current += u_vectors[s]
-                        _set_flat_params(model, theta_current)
+                    _advance_theta(s)
                     continue
                 # 创建轻量级 StepRecord，只包含 HVP 计算所需的最小信息
                 srec = StepRecord(
@@ -804,9 +808,7 @@ def compute_correction(
                 rec_dict = lazy_loader.load_single_step(s, include_tensors=True)
                 if rec_dict is None:
                     logger.warning(f"Step {s} not found, skipping")
-                    if use_historical_params and s in u_vectors:
-                        theta_current += u_vectors[s]
-                        _set_flat_params(model, theta_current)
+                    _advance_theta(s)
                     continue
                 srec = StepRecord(
                     step_id=rec_dict["step_id"],
@@ -822,9 +824,7 @@ def compute_correction(
             srec = step_log[s] if step_log else None
             if srec is None:
                 logger.warning(f"Step {s} not found, skipping")
-                if use_historical_params and s in u_vectors:
-                    theta_current += u_vectors[s]
-                    _set_flat_params(model, theta_current)
+                _advance_theta(s)
                 continue
 
         # 此时模型参数已是 θ[s] (如果 use_historical_params)
@@ -846,10 +846,8 @@ def compute_correction(
 
         hvp_calls += 1
 
-        # 推进到 θ[s+1]: theta_current += u[s], 然后写回模型
-        if use_historical_params and s in u_vectors:
-            theta_current += u_vectors[s]
-            _set_flat_params(model, theta_current)
+        # 推进到 θ[s+1]
+        _advance_theta(s)
 
         # 清理当前记录 (lazy loading 模式)
         if use_lazy_loading:

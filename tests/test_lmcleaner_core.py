@@ -886,65 +886,65 @@ class TestHistoricalParameterReconstruction:
         # Fixed seed for deterministic, reproducible test
         rng_state = torch.get_rng_state()
         torch.manual_seed(0)
+        try:
+            params = [p for p in simple_model.parameters() if p.requires_grad]
+            param_count = sum(p.numel() for p in params)
 
-        params = [p for p in simple_model.parameters() if p.requires_grad]
-        param_count = sum(p.numel() for p in params)
+            # Create step log with u vectors (simulating training history)
+            step_log = StepLog(max_size=100)
 
-        # Create step log with u vectors (simulating training history)
-        step_log = StepLog(max_size=100)
-
-        # Step 10 (forget step): u[10] = θ[11] - θ[10]
-        u_tz = torch.randn(param_count) * 0.01
-        step_log.add(StepRecord(
-            step_id=10, eta=0.01, batch_id="forget",
-            u=u_tz, batch_data=batch_data
-        ))
-
-        # Steps 11-13: subsequent steps with u vectors and batch_data
-        for i in range(11, 14):
-            u_i = torch.randn(param_count) * 0.01
+            # Step 10 (forget step): u[10] = θ[11] - θ[10]
+            u_tz = torch.randn(param_count) * 0.01
             step_log.add(StepRecord(
-                step_id=i, eta=0.01, batch_id=f"b{i}",
-                u=u_i, batch_data=batch_data
+                step_id=10, eta=0.01, batch_id="forget",
+                u=u_tz, batch_data=batch_data
             ))
 
-        cfg = HVPConfig(mode="fisher", damping=0.0, device="cpu")
+            # Steps 11-13: subsequent steps with u vectors and batch_data
+            for i in range(11, 14):
+                u_i = torch.randn(param_count) * 0.01
+                step_log.add(StepRecord(
+                    step_id=i, eta=0.01, batch_id=f"b{i}",
+                    u=u_i, batch_data=batch_data
+                ))
 
-        # Compute correction WITH historical parameters (u vectors available)
-        v_historical, audit_hist = compute_correction(
-            tz=10, tau=14, K=3,
-            step_log=step_log, cfg=cfg, model=simple_model
-        )
+            cfg = HVPConfig(mode="fisher", damping=0.0, device="cpu")
 
-        # Now create a step_log WITHOUT u vectors (only for propagation steps)
-        # This forces fallback to θ[τ]
-        step_log_no_u = StepLog(max_size=100)
-        step_log_no_u.add(StepRecord(
-            step_id=10, eta=0.01, batch_id="forget",
-            u=u_tz, batch_data=batch_data  # Need u for Phase 1
-        ))
-        for i in range(11, 14):
+            # Compute correction WITH historical parameters (u vectors available)
+            v_historical, audit_hist = compute_correction(
+                tz=10, tau=14, K=3,
+                step_log=step_log, cfg=cfg, model=simple_model
+            )
+
+            # Now create a step_log WITHOUT u vectors (only for propagation steps)
+            # This forces fallback to θ[τ]
+            step_log_no_u = StepLog(max_size=100)
             step_log_no_u.add(StepRecord(
-                step_id=i, eta=0.01, batch_id=f"b{i}",
-                u=None, batch_data=batch_data  # No u -> fallback to θ[τ]
+                step_id=10, eta=0.01, batch_id="forget",
+                u=u_tz, batch_data=batch_data  # Need u for Phase 1
             ))
+            for i in range(11, 14):
+                step_log_no_u.add(StepRecord(
+                    step_id=i, eta=0.01, batch_id=f"b{i}",
+                    u=None, batch_data=batch_data  # No u -> fallback to θ[τ]
+                ))
 
-        v_current, audit_curr = compute_correction(
-            tz=10, tau=14, K=3,
-            step_log=step_log_no_u, cfg=cfg, model=simple_model
-        )
+            v_current, audit_curr = compute_correction(
+                tz=10, tau=14, K=3,
+                step_log=step_log_no_u, cfg=cfg, model=simple_model
+            )
 
-        # Both should have done 3 HVP calls
-        assert audit_hist.hvp_calls == 3
-        assert audit_curr.hvp_calls == 3
+            # Both should have done 3 HVP calls
+            assert audit_hist.hvp_calls == 3
+            assert audit_curr.hvp_calls == 3
 
-        # The corrections should differ because HVP was evaluated at
-        # different parameter points
-        assert not torch.allclose(v_historical, v_current, atol=1e-6), \
-            "Historical and current-param corrections should differ"
-
-        # Restore RNG state to avoid affecting other tests
-        torch.set_rng_state(rng_state)
+            # The corrections should differ because HVP was evaluated at
+            # different parameter points
+            assert not torch.allclose(v_historical, v_current, atol=1e-6), \
+                "Historical and current-param corrections should differ"
+        finally:
+            # Restore RNG state even if assertions fail
+            torch.set_rng_state(rng_state)
 
     def test_model_params_restored_after_correction(self, simple_model, batch_data):
         """Verify model parameters are restored to θ[τ] after compute_correction."""
