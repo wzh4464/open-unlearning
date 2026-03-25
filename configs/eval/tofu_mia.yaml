@@ -1,0 +1,21 @@
+# @package eval.tofu
+# TOFU MIA + Privacy evaluation config
+# Includes MIA attacks and privacy leakage metrics
+
+defaults:
+  - tofu_metrics:
+    - mia_loss
+    - mia_min_k
+    - mia_min_k_plus_plus
+    - mia_zlib
+    - privleak
+
+handler: TOFUEvaluator
+output_dir: ${paths.output_dir}
+metrics: {}
+overwrite: false
+forget_split: forget10
+holdout_split: holdout10
+retain_logs_path: null
+question_key: "question"
+batch_size: 32

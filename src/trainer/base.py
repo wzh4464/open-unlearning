@@ -178,7 +178,7 @@ class FinetuneTrainer(Trainer):
                             "output_dir": output_dir,
                             "template_args": self.template_args,
                             "model": self.model,
-                            "tokenizer": self.tokenizer,
+                            "tokenizer": getattr(self, "processing_class", getattr(self, "tokenizer", None)),
                         }
                         eval_metrics.update(evaluator.evaluate(**eval_args))
                     self.log(eval_metrics)
