@@ -27,6 +27,8 @@ from trainer.unlearn.lmcleaner_core import (
     inject_privacy_noise,
     _flatten,
     _unflatten_like,
+    _set_flat_params,
+    _get_flat_params,
     compute_param_update_vector,
     clone_parameters,
 )
@@ -853,6 +855,181 @@ class TestCorrectionComputation:
 
         with pytest.raises((ValueError, RuntimeError), match="(Vector size mismatch|shape .* is invalid)"):
             apply_correction(v, params)
+
+
+# ============================================================================
+# Test Historical Parameter Reconstruction (Paper Algorithm 1)
+# ============================================================================
+
+class TestHistoricalParameterReconstruction:
+    """Test that HVP is computed at historical θ[s], not current θ[τ]."""
+
+    def test_set_get_flat_params_roundtrip(self, simple_model):
+        """Test that _set_flat_params and _get_flat_params are inverses."""
+        original = _get_flat_params(simple_model).clone()
+        new_params = torch.randn_like(original)
+        _set_flat_params(simple_model, new_params)
+        retrieved = _get_flat_params(simple_model)
+        assert torch.allclose(retrieved, new_params)
+        # Restore
+        _set_flat_params(simple_model, original)
+
+    def test_historical_params_used_in_hvp(self, simple_model, batch_data):
+        """
+        Verify that when u[t] vectors are available, HVP is computed at θ[s]
+        rather than θ[τ], producing different results.
+
+        Setup: Create a step_log with u[t] vectors that represent a non-trivial
+        parameter trajectory. Then compare correction computed with and without
+        historical parameter reconstruction.
+        """
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+
+        # Create step log with u vectors (simulating training history)
+        step_log = StepLog(max_size=100)
+
+        # Step 10 (forget step): u[10] = θ[11] - θ[10]
+        u_tz = torch.randn(param_count) * 0.01
+        step_log.add(StepRecord(
+            step_id=10, eta=0.01, batch_id="forget",
+            u=u_tz, batch_data=batch_data
+        ))
+
+        # Steps 11-13: subsequent steps with u vectors and batch_data
+        for i in range(11, 14):
+            u_i = torch.randn(param_count) * 0.01
+            step_log.add(StepRecord(
+                step_id=i, eta=0.01, batch_id=f"b{i}",
+                u=u_i, batch_data=batch_data
+            ))
+
+        cfg = HVPConfig(mode="fisher", damping=0.0, device="cpu")
+
+        # Compute correction WITH historical parameters (u vectors available)
+        v_historical, audit_hist = compute_correction(
+            tz=10, tau=14, K=3,
+            step_log=step_log, cfg=cfg, model=simple_model
+        )
+
+        # Now create a step_log WITHOUT u vectors (only for propagation steps)
+        # This forces fallback to θ[τ]
+        step_log_no_u = StepLog(max_size=100)
+        step_log_no_u.add(StepRecord(
+            step_id=10, eta=0.01, batch_id="forget",
+            u=u_tz, batch_data=batch_data  # Need u for Phase 1
+        ))
+        for i in range(11, 14):
+            step_log_no_u.add(StepRecord(
+                step_id=i, eta=0.01, batch_id=f"b{i}",
+                u=None, batch_data=batch_data  # No u -> fallback to θ[τ]
+            ))
+
+        v_current, audit_curr = compute_correction(
+            tz=10, tau=14, K=3,
+            step_log=step_log_no_u, cfg=cfg, model=simple_model
+        )
+
+        # Both should have done 3 HVP calls
+        assert audit_hist.hvp_calls == 3
+        assert audit_curr.hvp_calls == 3
+
+        # The corrections should differ because HVP was evaluated at
+        # different parameter points
+        assert not torch.allclose(v_historical, v_current, atol=1e-6), \
+            "Historical and current-param corrections should differ"
+
+    def test_model_params_restored_after_correction(self, simple_model, batch_data):
+        """Verify model parameters are restored to θ[τ] after compute_correction."""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+
+        # Save original θ[τ]
+        theta_tau = _get_flat_params(simple_model).clone()
+
+        # Create step log with u vectors
+        step_log = StepLog(max_size=100)
+        u_tz = torch.randn(param_count) * 0.01
+        step_log.add(StepRecord(
+            step_id=10, eta=0.01, batch_id="forget",
+            u=u_tz, batch_data=batch_data
+        ))
+        for i in range(11, 14):
+            step_log.add(StepRecord(
+                step_id=i, eta=0.01, batch_id=f"b{i}",
+                u=torch.randn(param_count) * 0.01,
+                batch_data=batch_data
+            ))
+
+        cfg = HVPConfig(mode="fisher", damping=0.0, device="cpu")
+
+        compute_correction(
+            tz=10, tau=14, K=3,
+            step_log=step_log, cfg=cfg, model=simple_model
+        )
+
+        # Model should be back to θ[τ]
+        theta_after = _get_flat_params(simple_model)
+        assert torch.allclose(theta_tau, theta_after, atol=1e-7), \
+            "Model parameters should be restored to θ[τ] after correction"
+
+    def test_fallback_when_u_missing(self, simple_model, batch_data):
+        """When some u[t] are missing, should fall back to θ[τ] gracefully."""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+
+        step_log = StepLog(max_size=100)
+        u_tz = torch.randn(param_count) * 0.01
+        step_log.add(StepRecord(
+            step_id=10, eta=0.01, batch_id="forget",
+            u=u_tz, batch_data=batch_data
+        ))
+
+        # Step 11 has u, but step 12 doesn't -> fallback
+        step_log.add(StepRecord(
+            step_id=11, eta=0.01, batch_id="b11",
+            u=torch.randn(param_count) * 0.01, batch_data=batch_data
+        ))
+        step_log.add(StepRecord(
+            step_id=12, eta=0.01, batch_id="b12",
+            u=None, batch_data=batch_data  # Missing u
+        ))
+        step_log.add(StepRecord(
+            step_id=13, eta=0.01, batch_id="b13",
+            u=torch.randn(param_count) * 0.01, batch_data=batch_data
+        ))
+
+        cfg = HVPConfig(mode="fisher", damping=0.0, device="cpu")
+
+        # Should not crash, just fall back
+        v, audit = compute_correction(
+            tz=10, tau=14, K=3,
+            step_log=step_log, cfg=cfg, model=simple_model
+        )
+
+        assert audit.hvp_calls == 3
+        assert not torch.isnan(v).any()
+
+    def test_k_zero_unchanged_with_historical(self, simple_model, batch_data):
+        """With K=0, no propagation occurs so historical params are irrelevant."""
+        params = [p for p in simple_model.parameters() if p.requires_grad]
+        param_count = sum(p.numel() for p in params)
+
+        step_log = StepLog(max_size=100)
+        u_tz = torch.randn(param_count)
+        step_log.add(StepRecord(
+            step_id=10, eta=0.01, batch_id="forget", u=u_tz
+        ))
+
+        cfg = HVPConfig(mode="fisher", damping=0.0, device="cpu")
+        v, audit = compute_correction(
+            tz=10, tau=15, K=0,
+            step_log=step_log, cfg=cfg, model=simple_model
+        )
+
+        assert torch.allclose(v, -u_tz)
+        assert audit.K_used == 0
+        assert audit.hvp_calls == 0
 
 
 # ============================================================================
