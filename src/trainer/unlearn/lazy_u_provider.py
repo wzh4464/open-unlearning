@@ -76,7 +76,7 @@ class LazyUProvider:
 
         # Cache: step_id -> u[t] tensor (CPU, to save GPU memory)
         self._cache: Dict[int, torch.Tensor] = {}
-        self._stats = {"pkl_hits": 0, "recomputed": 0, "cache_hits": 0}
+        self._stats = {"recomputed": 0, "cache_hits": 0}
 
     def get_u(self, step_id: int) -> Optional[torch.Tensor]:
         """Recompute u[t] = -η * grad for a given step.
