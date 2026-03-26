@@ -110,8 +110,11 @@ class LazyRecordLoader:
                 if match:
                     step_id = int(match.group(1))
                     self._chunk_index[meta_file.name] = (step_id, step_id)
-            logger.info(f"Built index from {len(self._chunk_index)} step_meta files (new format)")
-        else:
+            if not self._chunk_index:
+                logger.warning("step_meta files found but none matched regex, trying legacy format")
+            else:
+                logger.info(f"Built index from {len(self._chunk_index)} step_meta files (new format)")
+        if not self._chunk_index:
             # Fall back to old format
             chunk_files = sorted(self.log_dir.glob("step_records_chunk_*.pkl"))
             if not chunk_files:
@@ -196,6 +199,9 @@ class LazyRecordLoader:
                         u_file = self.log_dir / "u_vectors" / f"u_{rec['step_id']:06d}.pt"
                         if u_file.exists():
                             rec["u"] = torch.load(u_file, map_location="cpu", weights_only=True, mmap=True)
+                        else:
+                            logger.warning(f"Missing u-vector file {u_file} for step {rec['step_id']}")
+                            rec["u"] = None
                     else:
                         rec.pop("u", None)
                         rec.pop("gbar", None)
