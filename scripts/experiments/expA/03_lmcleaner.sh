@@ -50,7 +50,9 @@ $PYTHON_CMD src/train.py --config-name=unlearn.yaml \
     trainer.args.gradient_checkpointing=true \
     trainer.args.seed=${SEED} \
     ++trainer.args.bf16=true \
-    trainer.args.efficiency_tracking.enabled=true
+    trainer.args.efficiency_tracking.enabled=true \
+    model.model_args.attn_implementation=eager \
+    trainer.method_args.use_historical_params=false
 
 echo ""
 echo "LMCleaner unlearning complete!"
