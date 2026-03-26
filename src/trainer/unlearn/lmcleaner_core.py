@@ -30,6 +30,10 @@ import gc
 import torch
 import torch.nn as nn
 
+# Keys whose first dimension is the batch dimension in standard HF batch_data dicts.
+# Used by _get_batch_size and micro-batch slicing in hvp_apply.
+_BATCH_DIM_KEYS = ("input_ids", "labels", "attention_mask")
+
 logger = logging.getLogger(__name__)
 
 
@@ -183,6 +187,7 @@ class HVPConfig:
         rank: int = 10,
         device: str = "cuda",
         dtype: torch.dtype = torch.float32,
+        hvp_micro_batch_size: int = 0,  # 0 = use full batch; >0 = micro-batch HVP
     ):
         valid_modes = {"fisher", "GGN", "diag", "exact", "low_rank"}
         if mode not in valid_modes:
@@ -193,6 +198,7 @@ class HVPConfig:
         self.device = device
         self.dtype = dtype
         self.hessian_mode = mode  # 兼容性
+        self.hvp_micro_batch_size = hvp_micro_batch_size
 
 
 def hvp_exact(
@@ -694,21 +700,60 @@ def hvp_apply(
         for k, val in batch_data.items()
     }
 
-    if mode == "fisher":
-        # 论文 Algorithm 1 使用的方法: Hv = g · (g^T v)
-        return hvp_fisher(model, batch_data, v, loss_fn=loss_fn)
-    elif mode == "diag":
-        return hvp_diagonal(model, batch_data, v, step_rec.diag_H)
-    elif mode == "GGN":
-        return hvp_ggn(model, batch_data, v)
-    elif mode == "exact":
-        return hvp_exact(model, loss_fn, batch_data, v)
-    elif mode == "low_rank":
-        # TODO: 实现低秩近似
-        logger.warning("Low-rank HVP not implemented, falling back to fisher")
-        return hvp_fisher(model, batch_data, v, loss_fn=loss_fn)
-    else:
-        raise ValueError(f"Unknown hessian_mode: {mode}")
+    def _hvp_single(bd):
+        """Run HVP on a single (micro-)batch."""
+        if mode == "fisher":
+            return hvp_fisher(model, bd, v, loss_fn=loss_fn)
+        elif mode == "diag":
+            return hvp_diagonal(model, bd, v, step_rec.diag_H)
+        elif mode == "GGN":
+            return hvp_ggn(model, bd, v)
+        elif mode == "exact":
+            return hvp_exact(model, loss_fn, bd, v)
+        elif mode == "low_rank":
+            logger.warning("Low-rank HVP not implemented, falling back to fisher")
+            return hvp_fisher(model, bd, v, loss_fn=loss_fn)
+        else:
+            raise ValueError(f"Unknown hessian_mode: {mode}")
+
+    # Micro-batch HVP to avoid OOM on large batches
+    mbs = cfg.hvp_micro_batch_size
+    batch_size = _get_batch_size(batch_data)
+    if batch_size == 0:
+        logger.warning("Could not infer batch size from batch_data, falling back to full-batch HVP")
+        return _hvp_single(batch_data)
+    if mbs <= 0 or batch_size <= mbs:
+        return _hvp_single(batch_data)
+
+    # Guard: micro-batch averaging is only correct under mean reduction.
+    # HF Trainer and all built-in HVP modes (fisher, GGN) use mean loss.
+    # If a custom loss_fn with sum/none reduction is used, fall back to full batch.
+    if loss_fn is not None and hasattr(loss_fn, "reduction") and loss_fn.reduction != "mean":
+        logger.warning(
+            f"HVP micro-batching requires mean-reduced loss, got {loss_fn.reduction}; "
+            "falling back to full-batch HVP"
+        )
+        return _hvp_single(batch_data)
+
+    # Split batch into micro-batches, compute HVP on each, weighted average.
+    # Each chunk's HVP is weighted by chunk_size / total_samples to preserve
+    # equivalence with full-batch mean-loss HVP.
+    slice_keys = _get_sliceable_keys(batch_data, batch_size)
+    hvp_acc = torch.zeros_like(v)
+    total_samples = 0
+    for start_idx in range(0, batch_size, mbs):
+        end_idx = min(start_idx + mbs, batch_size)
+        chunk_size = end_idx - start_idx
+        micro = {
+            k: val[start_idx:end_idx] if k in slice_keys else val
+            for k, val in batch_data.items()
+        }
+        chunk_hvp = _hvp_single(micro)
+        hvp_acc += chunk_hvp * chunk_size
+        total_samples += chunk_size
+        del micro, chunk_hvp
+
+    return hvp_acc / total_samples
 
 
 def compute_noise_sigma(
@@ -1443,6 +1488,33 @@ def apply_correction(
 
 
 # 辅助函数
+
+
+def _get_batch_size(batch_data: Dict[str, torch.Tensor]) -> int:
+    """Infer batch size from batch_data dict.
+
+    Uses _BATCH_DIM_KEYS to identify tensors whose dim-0 is the batch dimension.
+    Returns 0 if batch size cannot be determined.
+    """
+    sizes = set()
+    for key in _BATCH_DIM_KEYS:
+        if key in batch_data and isinstance(batch_data[key], torch.Tensor) and batch_data[key].dim() > 0:
+            sizes.add(batch_data[key].size(0))
+    if len(sizes) == 1:
+        return sizes.pop()
+    if len(sizes) > 1:
+        logger.warning(f"Inconsistent batch sizes across keys: {sizes}, using min")
+        return min(sizes)
+    return 0
+
+
+def _get_sliceable_keys(batch_data: Dict[str, torch.Tensor], batch_size: int) -> set:
+    """Identify keys in batch_data whose dim-0 matches batch_size (safe to slice)."""
+    keys = set()
+    for k, v in batch_data.items():
+        if isinstance(v, torch.Tensor) and v.dim() > 0 and v.size(0) == batch_size:
+            keys.add(k)
+    return keys
 
 
 def _flatten(tensors: List[torch.Tensor]) -> torch.Tensor:

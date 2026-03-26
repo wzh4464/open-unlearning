@@ -94,6 +94,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # ! 显存紧张时设为 False 退化为在 θ[τ] 处近似计算
         # ! 详见 docs/historical_params_hvp.md
         use_historical_params: bool = True,
+        hvp_micro_batch_size: int = 0,
         *args,
         **kwargs,
     ):
@@ -125,6 +126,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             damping=damping,
             device=str(self.model.device) if hasattr(self.model, "device") else "cuda",
             dtype=next(self.model.parameters()).dtype,
+            hvp_micro_batch_size=hvp_micro_batch_size,
         )
 
         # 审计日志

@@ -49,6 +49,11 @@ method_args:
   # ! 详见 docs/historical_params_hvp.md
   use_historical_params: true
 
+  # HVP micro-batch size for large training batches
+  # 0 = use full batch (default); >0 = split batch into chunks to avoid OOM
+  # Recommended: 32 or 64 when training batch size >= 128
+  hvp_micro_batch_size: 0
+
   # 审计日志输出目录 (可选)
   # 记录每次遗忘操作的详细信息
   audit_dir: ${paths.output_dir}/audit
