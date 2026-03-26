@@ -721,16 +721,21 @@ def hvp_apply(
     if mbs <= 0 or batch_size <= mbs:
         return _hvp_single(batch_data)
 
-    # Split batch into micro-batches, compute HVP on each, weighted average
+    # Split batch into micro-batches, compute HVP on each, weighted average.
+    # Assumes loss reduction='mean' per sample (HF default), so each chunk's
+    # HVP is weighted by chunk_size and divided by total to get the correct average.
+    _SLICE_KEYS = {"input_ids", "labels", "attention_mask"}
     hvp_acc = torch.zeros_like(v)
     total_samples = 0
     for start_idx in range(0, batch_size, mbs):
         end_idx = min(start_idx + mbs, batch_size)
         chunk_size = end_idx - start_idx
-        micro = {
-            k: val[start_idx:end_idx] if isinstance(val, torch.Tensor) and val.dim() > 0 and val.size(0) == batch_size else val
-            for k, val in batch_data.items()
-        }
+        micro = {}
+        for k, val in batch_data.items():
+            if k in _SLICE_KEYS and isinstance(val, torch.Tensor) and val.dim() > 0:
+                micro[k] = val[start_idx:end_idx]
+            else:
+                micro[k] = val
         chunk_hvp = _hvp_single(micro)
         hvp_acc += chunk_hvp * chunk_size
         total_samples += chunk_size
@@ -1474,14 +1479,21 @@ def apply_correction(
 
 
 def _get_batch_size(batch_data: Dict[str, torch.Tensor]) -> int:
-    """Infer batch size from batch_data dict."""
-    for key in ("input_ids", "labels", "attention_mask"):
-        if key in batch_data and isinstance(batch_data[key], torch.Tensor):
-            return batch_data[key].size(0)
-    # fallback: first tensor with dim > 0
-    for val in batch_data.values():
-        if isinstance(val, torch.Tensor) and val.dim() > 0:
-            return val.size(0)
+    """Infer batch size from batch_data dict.
+
+    Uses known batch-dimension keys (input_ids, labels, attention_mask) to avoid
+    picking up non-batch tensors. Returns 0 if batch size cannot be determined.
+    """
+    _BATCH_KEYS = ("input_ids", "labels", "attention_mask")
+    sizes = set()
+    for key in _BATCH_KEYS:
+        if key in batch_data and isinstance(batch_data[key], torch.Tensor) and batch_data[key].dim() > 0:
+            sizes.add(batch_data[key].size(0))
+    if len(sizes) == 1:
+        return sizes.pop()
+    if len(sizes) > 1:
+        logger.warning(f"Inconsistent batch sizes across keys: {sizes}, using min")
+        return min(sizes)
     return 0
 
 
