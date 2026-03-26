@@ -183,6 +183,7 @@ class HVPConfig:
         rank: int = 10,
         device: str = "cuda",
         dtype: torch.dtype = torch.float32,
+        hvp_micro_batch_size: int = 0,  # 0 = use full batch; >0 = micro-batch HVP
     ):
         valid_modes = {"fisher", "GGN", "diag", "exact", "low_rank"}
         if mode not in valid_modes:
@@ -193,6 +194,7 @@ class HVPConfig:
         self.device = device
         self.dtype = dtype
         self.hessian_mode = mode  # 兼容性
+        self.hvp_micro_batch_size = hvp_micro_batch_size
 
 
 def hvp_exact(
@@ -694,21 +696,44 @@ def hvp_apply(
         for k, val in batch_data.items()
     }
 
-    if mode == "fisher":
-        # 论文 Algorithm 1 使用的方法: Hv = g · (g^T v)
-        return hvp_fisher(model, batch_data, v, loss_fn=loss_fn)
-    elif mode == "diag":
-        return hvp_diagonal(model, batch_data, v, step_rec.diag_H)
-    elif mode == "GGN":
-        return hvp_ggn(model, batch_data, v)
-    elif mode == "exact":
-        return hvp_exact(model, loss_fn, batch_data, v)
-    elif mode == "low_rank":
-        # TODO: 实现低秩近似
-        logger.warning("Low-rank HVP not implemented, falling back to fisher")
-        return hvp_fisher(model, batch_data, v, loss_fn=loss_fn)
-    else:
-        raise ValueError(f"Unknown hessian_mode: {mode}")
+    def _hvp_single(bd):
+        """Run HVP on a single (micro-)batch."""
+        if mode == "fisher":
+            return hvp_fisher(model, bd, v, loss_fn=loss_fn)
+        elif mode == "diag":
+            return hvp_diagonal(model, bd, v, step_rec.diag_H)
+        elif mode == "GGN":
+            return hvp_ggn(model, bd, v)
+        elif mode == "exact":
+            return hvp_exact(model, loss_fn, bd, v)
+        elif mode == "low_rank":
+            logger.warning("Low-rank HVP not implemented, falling back to fisher")
+            return hvp_fisher(model, bd, v, loss_fn=loss_fn)
+        else:
+            raise ValueError(f"Unknown hessian_mode: {mode}")
+
+    # Micro-batch HVP to avoid OOM on large batches
+    mbs = cfg.hvp_micro_batch_size
+    batch_size = _get_batch_size(batch_data)
+    if mbs <= 0 or batch_size <= mbs:
+        return _hvp_single(batch_data)
+
+    # Split batch into micro-batches, compute HVP on each, average
+    hvp_acc = torch.zeros_like(v)
+    n_chunks = 0
+    for start_idx in range(0, batch_size, mbs):
+        end_idx = min(start_idx + mbs, batch_size)
+        micro = {
+            k: val[start_idx:end_idx] if isinstance(val, torch.Tensor) and val.dim() > 0 and val.size(0) == batch_size else val
+            for k, val in batch_data.items()
+        }
+        chunk_hvp = _hvp_single(micro)
+        hvp_acc += chunk_hvp * (end_idx - start_idx)
+        n_chunks += (end_idx - start_idx)
+        del micro, chunk_hvp
+        torch.cuda.empty_cache()
+
+    return hvp_acc / n_chunks
 
 
 def compute_noise_sigma(
@@ -1443,6 +1468,18 @@ def apply_correction(
 
 
 # 辅助函数
+
+
+def _get_batch_size(batch_data: Dict[str, torch.Tensor]) -> int:
+    """Infer batch size from batch_data dict."""
+    for key in ("input_ids", "labels", "attention_mask"):
+        if key in batch_data and isinstance(batch_data[key], torch.Tensor):
+            return batch_data[key].size(0)
+    # fallback: first tensor with dim > 0
+    for val in batch_data.values():
+        if isinstance(val, torch.Tensor) and val.dim() > 0:
+            return val.size(0)
+    return 0
 
 
 def _flatten(tensors: List[torch.Tensor]) -> torch.Tensor:
