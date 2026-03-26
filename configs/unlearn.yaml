@@ -2,7 +2,7 @@ defaults:
   - model: Phi-3.5-mini-instruct
   - trainer: GradAscent
   - data: unlearn
-  - collator: DataCollatorForSupervisedDataset
+  - collator: DataCollatorForSupervisedDatasetwithIndex
   - eval: tofu
   - hydra: default
   - paths: default

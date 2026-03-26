@@ -3,11 +3,15 @@ defaults:
   - model: Phi-3.5-1B-Instruct
   - trainer: finetune
   - data: finetune
-  - collator: DataCollatorForSupervisedDataset
+  - collator: DataCollatorForSupervisedDatasetwithIndex
   - eval: tofu
   - hydra: default
   - paths: default
   - experiment: null
+
+trainer:
+  args:
+    remove_unused_columns: False
 
 mode: train
 task_name: ???

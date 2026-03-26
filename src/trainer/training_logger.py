@@ -101,23 +101,32 @@ class LazyRecordLoader:
             except (json.JSONDecodeError, ValueError) as e:
                 logger.warning(f"Failed to load cached index: {e}")
 
-        chunk_files = sorted(self.log_dir.glob("step_records_chunk_*.pkl"))
-        if not chunk_files:
-            logger.warning("No chunk files found")
-            return
-
-        logger.info(f"Building chunk index from {len(chunk_files)} file names...")
-
-        # 从文件名解析 step_id，无需读取文件内容
-        # 文件名格式: step_records_chunk_{step_id}.pkl
-        pattern = re.compile(r"step_records_chunk_(\d+)\.pkl")
-
-        for chunk_file in chunk_files:
-            match = pattern.match(chunk_file.name)
-            if match:
-                step_id = int(match.group(1))
-                # 每个 chunk 文件包含一个 step 的记录
-                self._chunk_index[chunk_file.name] = (step_id, step_id)
+        # Try new format first: step_meta_*.pkl + u_vectors/
+        meta_files = sorted(self.log_dir.glob("step_meta_*.pkl"))
+        if meta_files:
+            pattern = re.compile(r"step_meta_(\d+)\.pkl")
+            for meta_file in meta_files:
+                match = pattern.match(meta_file.name)
+                if match:
+                    step_id = int(match.group(1))
+                    self._chunk_index[meta_file.name] = (step_id, step_id)
+            if not self._chunk_index:
+                logger.warning("step_meta files found but none matched regex, trying legacy format")
+            else:
+                logger.info(f"Built index from {len(self._chunk_index)} step_meta files (new format)")
+        if not self._chunk_index:
+            # Fall back to old format
+            chunk_files = sorted(self.log_dir.glob("step_records_chunk_*.pkl"))
+            if not chunk_files:
+                logger.warning("No step_meta or chunk files found")
+                return
+            logger.info(f"Building chunk index from {len(chunk_files)} file names...")
+            pattern = re.compile(r"step_records_chunk_(\d+)\.pkl")
+            for chunk_file in chunk_files:
+                match = pattern.match(chunk_file.name)
+                if match:
+                    step_id = int(match.group(1))
+                    self._chunk_index[chunk_file.name] = (step_id, step_id)
 
         # 保存索引缓存
         with open(index_cache, "w") as f:
@@ -180,21 +189,35 @@ class LazyRecordLoader:
         def load_chunk_filtered(chunk_name: str, wanted_steps: Set[int]) -> List[Dict]:
             chunk_file = self.log_dir / chunk_name
             try:
-                with open(chunk_file, "rb") as f:
-                    records = pickle.load(f)
-                # 只保留需要的步骤
-                filtered = []
-                for r in records:
-                    if r["step_id"] in wanted_steps:
-                        if not include_tensors:
-                            # 移除 tensor 数据以节省内存
-                            r = {
-                                k: v
-                                for k, v in r.items()
-                                if k not in ("u", "gbar", "diag_H")
-                            }
-                        filtered.append(r)
-                return filtered
+                if chunk_name.startswith("step_meta_"):
+                    # New format: lightweight meta + separate u_vectors/
+                    with open(chunk_file, "rb") as f:
+                        rec = pickle.load(f)
+                    if rec["step_id"] not in wanted_steps:
+                        return []
+                    if include_tensors:
+                        u_file = self.log_dir / "u_vectors" / f"u_{rec['step_id']:06d}.pt"
+                        if u_file.exists():
+                            rec["u"] = torch.load(u_file, map_location="cpu", weights_only=True, mmap=True)
+                        else:
+                            logger.warning(f"Missing u-vector file {u_file} for step {rec['step_id']}")
+                            rec["u"] = None
+                    else:
+                        rec.pop("u", None)
+                        rec.pop("gbar", None)
+                        rec.pop("diag_H", None)
+                    return [rec]
+                else:
+                    # Old format: full chunk pkl
+                    with open(chunk_file, "rb") as f:
+                        records = pickle.load(f)
+                    filtered = []
+                    for r in records:
+                        if r["step_id"] in wanted_steps:
+                            if not include_tensors:
+                                r = {k: v for k, v in r.items() if k not in ("u", "gbar", "diag_H")}
+                            filtered.append(r)
+                    return filtered
             except Exception as e:
                 logger.warning(f"Error loading {chunk_name}: {e}")
                 return []
