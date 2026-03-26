@@ -73,9 +73,14 @@ def main():
             else:
                 row["status"] = "no_eval"
 
-            # Efficiency
+            # Efficiency: try efficiency_metrics.json first, fallback to audit_records
             eff_path = saves / "unlearn" / task / "efficiency_metrics.json"
+            audit_path = saves / "unlearn" / task / "audit" / "audit_records.json"
+            meta_path = saves / "unlearn" / task / "unlearning_meta.json"
             eff = load_json(eff_path)
+            audit = load_json(audit_path)
+            umeta = load_json(meta_path)
+
             if eff:
                 row["unlearn_time_s"] = eff.get("lmcleaner_unlearning_total_time_seconds",
                                                   eff.get("unlearning_time_seconds"))
@@ -89,6 +94,26 @@ def main():
                 row["num_forget_steps"] = eff.get("lmcleaner_num_forget_steps")
                 row["num_affected_batches"] = eff.get("lmcleaner_num_affected_batches")
                 row["train_logs_gb"] = eff.get("lmcleaner_train_logs_size_gb")
+            elif audit and isinstance(audit, list) and len(audit) > 0:
+                # Derive efficiency from audit records
+                import statistics
+                times = [r.get("wall_time_ms", 0) for r in audit]
+                hvps = [r.get("hvp_calls", 0) for r in audit]
+                k_used = [r.get("K_used", 0) for r in audit]
+                vnorms = [r.get("v_norm", 0) for r in audit]
+                row["unlearn_time_s"] = sum(times) / 1000.0
+                row["total_hvp_calls"] = sum(hvps)
+                row["K_used_mean"] = statistics.mean(k_used) if k_used else 0
+                row["K_used_max"] = max(k_used) if k_used else 0
+                row["correction_norm_mean"] = statistics.mean(vnorms) if vnorms else 0
+                row["per_step_time_mean_ms"] = statistics.mean(times) if times else 0
+                row["num_forget_steps"] = len(audit)
+
+            if umeta:
+                row["num_affected_batches"] = umeta.get("num_forget_batches",
+                                                         row.get("num_affected_batches"))
+
+            if row.get("unlearn_time_s") is not None:
                 if row["status"] == "no_eval":
                     row["status"] = "unlearned"
             else:
