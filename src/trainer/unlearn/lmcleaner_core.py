@@ -725,9 +725,19 @@ def hvp_apply(
     if mbs <= 0 or batch_size <= mbs:
         return _hvp_single(batch_data)
 
+    # Guard: micro-batch averaging is only correct under mean reduction.
+    # HF Trainer and all built-in HVP modes (fisher, GGN) use mean loss.
+    # If a custom loss_fn with sum/none reduction is used, fall back to full batch.
+    if loss_fn is not None and hasattr(loss_fn, "reduction") and loss_fn.reduction != "mean":
+        logger.warning(
+            f"HVP micro-batching requires mean-reduced loss, got {loss_fn.reduction}; "
+            "falling back to full-batch HVP"
+        )
+        return _hvp_single(batch_data)
+
     # Split batch into micro-batches, compute HVP on each, weighted average.
-    # Assumes loss reduction='mean' per sample (HF default), so each chunk's
-    # HVP is weighted by chunk_size and divided by total to get the correct average.
+    # Each chunk's HVP is weighted by chunk_size / total_samples to preserve
+    # equivalence with full-batch mean-loss HVP.
     slice_keys = _get_sliceable_keys(batch_data, batch_size)
     hvp_acc = torch.zeros_like(v)
     total_samples = 0
