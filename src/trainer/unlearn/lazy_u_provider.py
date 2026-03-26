@@ -16,6 +16,13 @@ from torch.utils.data import DataLoader
 logger = logging.getLogger(__name__)
 
 
+class UProviderProtocol(Protocol):
+    """Interface for on-demand u[t] vector providers."""
+
+    def get_u(self, step_id: int) -> Optional[torch.Tensor]:
+        ...
+
+
 class LazyLoaderProtocol(Protocol):
     """Minimal interface for loading step records."""
 
@@ -72,18 +79,16 @@ class LazyUProvider:
         self._stats = {"pkl_hits": 0, "recomputed": 0, "cache_hits": 0}
 
     def get_u(self, step_id: int) -> Optional[torch.Tensor]:
-        """Get u[t] for a given step. Tries pkl first, then recomputes."""
+        """Recompute u[t] = -η * grad for a given step.
+
+        Note: pkl loading is handled by the caller (_load_u_for_step);
+        this method only does cache lookup + recomputation to avoid
+        double pkl reads.
+        """
         # Check memory cache
         if step_id in self._cache:
             self._stats["cache_hits"] += 1
             return self._cache[step_id]
-
-        # Try loading from pkl
-        u = self._load_from_pkl(step_id)
-        if u is not None:
-            self._stats["pkl_hits"] += 1
-            self._cache[step_id] = u.cpu()
-            return u
 
         # Recompute: u[t] = -η[t] * ḡ[t]
         u = self._recompute(step_id)
@@ -92,19 +97,6 @@ class LazyUProvider:
             self._cache[step_id] = u.cpu()
             return u
 
-        return None
-
-    def _load_from_pkl(self, step_id: int) -> Optional[torch.Tensor]:
-        """Try to load u[t] from a pkl file."""
-        try:
-            rec = self.lazy_loader.load_single_step(step_id, include_tensors=True)
-            if rec is not None:
-                u = rec.get("u")
-                del rec
-                if u is not None and isinstance(u, torch.Tensor) and u.norm() > 0:
-                    return u
-        except Exception:
-            pass
         return None
 
     def _recompute(self, step_id: int) -> Optional[torch.Tensor]:

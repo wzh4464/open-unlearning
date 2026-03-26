@@ -452,7 +452,7 @@ def _load_u_for_step(
     step_log: Optional["StepLog"] = None,
     lazy_loader: Optional["LazyLoaderProtocol"] = None,
     use_lazy_loading: bool = False,
-    u_provider=None,
+    u_provider: Optional["UProviderProtocol"] = None,
 ) -> Optional[torch.Tensor]:
     """Shared helper: load u[t] from pkl → step_log → u_provider (recompute)."""
     # Try pkl
@@ -1076,7 +1076,7 @@ def compute_correction(
     use_historical_params: bool = True,
     historical_param_provider: Optional[HistoricalParamProvider] = None,
     # Lazy u[t] recomputation (for steps without saved pkl)
-    u_provider=None,
+    u_provider: Optional["UProviderProtocol"] = None,
 ) -> Tuple[torch.Tensor, AuditRecord]:
     """
     计算参数校正向量(前向K步传播) - 论文 Algorithm 1 完整实现
