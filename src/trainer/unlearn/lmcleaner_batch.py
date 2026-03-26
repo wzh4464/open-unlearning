@@ -472,8 +472,8 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             split=self.finetune_dataset_split,
         )
 
-        # 获取 tokenizer 和模板参数
-        tokenizer = self.tokenizer
+        # 获取 tokenizer 和模板参数 (兼容 transformers 5.x processing_class)
+        tokenizer = getattr(self, "processing_class", getattr(self, "tokenizer", None))
         # 从 config 中获取 template_args (如果有的话)
         template_args = getattr(
             self,
@@ -559,9 +559,10 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # 保存模型
         self.model.save_pretrained(output_dir)
 
-        # 保存tokenizer
-        if hasattr(self, "tokenizer") and self.tokenizer is not None:
-            self.tokenizer.save_pretrained(output_dir)
+        # 保存tokenizer (兼容 transformers 5.x)
+        tok = getattr(self, "processing_class", getattr(self, "tokenizer", None))
+        if tok is not None:
+            tok.save_pretrained(output_dir)
 
         # 保存遗忘元信息
         import json
