@@ -20,7 +20,6 @@ print_config
 # =============================================
 for K_VAL in 10 20 30 40 50; do
     TASK="expA_lmcleaner_k${K_VAL}_s${SEED}"
-    OUTPUT="saves/unlearn/${TASK}"
     echo ""
     echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
     echo "[$(date '+%H:%M:%S')] LMCleaner K=${K_VAL}"
@@ -128,11 +127,14 @@ echo "[$(date '+%H:%M:%S')] Aggregate Results"
 echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
 
 # Custom aggregator that includes K variants
+AGGREGATE_SEED=${SEED} AGGREGATE_FINETUNE_DIR=${FINETUNE_DIR} AGGREGATE_RETRAIN_DIR=${RETRAIN_DIR} \
 $PYTHON_CMD - << 'PYEOF'
-import json, csv, sys
+import json, csv, sys, os
 from pathlib import Path
 
-seed = 0
+seed = int(os.environ.get("AGGREGATE_SEED", "0"))
+finetune_dir = os.environ.get("AGGREGATE_FINETUNE_DIR", "saves/finetune/llama32_3b_tofu_1epoch")
+retrain_dir = os.environ.get("AGGREGATE_RETRAIN_DIR", "saves/finetune/llama32_3b_tofu_retrain")
 results_dir = Path("saves/results/expA")
 results_dir.mkdir(parents=True, exist_ok=True)
 
@@ -169,8 +171,8 @@ def extract_metrics(model_dir):
     return result
 
 methods = {}
-methods["Original"] = Path(f"saves/finetune/llama32_3b_tofu_1epoch")
-methods["Retrain"] = Path(f"saves/finetune/llama32_3b_tofu_retrain")
+methods["Original"] = Path(finetune_dir)
+methods["Retrain"] = Path(retrain_dir)
 for k in [10, 20, 30, 40, 50]:
     d = Path(f"saves/unlearn/expA_lmcleaner_k{k}_s{seed}")
     if d.exists():
