@@ -47,10 +47,11 @@ class StepEndCallback(TrainerCallback):
     def __init__(self, trainer_ref):
         self._trainer = trainer_ref
 
-    def on_step_end(self, args, state, control, model=None, **kwargs):
+    def on_step_end(self, args, state, control, **kwargs):
         trainer = self._trainer
         if trainer.training_logger is None:
             return control
+        model = trainer.model  # HF callback doesn't pass model; get it from trainer
 
         step_id = state.global_step
         eta = trainer.optimizer.param_groups[0]["lr"]
