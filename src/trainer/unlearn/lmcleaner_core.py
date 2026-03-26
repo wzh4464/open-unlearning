@@ -30,6 +30,10 @@ import gc
 import torch
 import torch.nn as nn
 
+# Keys whose first dimension is the batch dimension in standard HF batch_data dicts.
+# Used by _get_batch_size and micro-batch slicing in hvp_apply.
+_BATCH_DIM_KEYS = ("input_ids", "labels", "attention_mask")
+
 logger = logging.getLogger(__name__)
 
 
@@ -724,18 +728,16 @@ def hvp_apply(
     # Split batch into micro-batches, compute HVP on each, weighted average.
     # Assumes loss reduction='mean' per sample (HF default), so each chunk's
     # HVP is weighted by chunk_size and divided by total to get the correct average.
-    _SLICE_KEYS = {"input_ids", "labels", "attention_mask"}
+    slice_keys = _get_sliceable_keys(batch_data, batch_size)
     hvp_acc = torch.zeros_like(v)
     total_samples = 0
     for start_idx in range(0, batch_size, mbs):
         end_idx = min(start_idx + mbs, batch_size)
         chunk_size = end_idx - start_idx
-        micro = {}
-        for k, val in batch_data.items():
-            if k in _SLICE_KEYS and isinstance(val, torch.Tensor) and val.dim() > 0:
-                micro[k] = val[start_idx:end_idx]
-            else:
-                micro[k] = val
+        micro = {
+            k: val[start_idx:end_idx] if k in slice_keys else val
+            for k, val in batch_data.items()
+        }
         chunk_hvp = _hvp_single(micro)
         hvp_acc += chunk_hvp * chunk_size
         total_samples += chunk_size
@@ -1481,12 +1483,11 @@ def apply_correction(
 def _get_batch_size(batch_data: Dict[str, torch.Tensor]) -> int:
     """Infer batch size from batch_data dict.
 
-    Uses known batch-dimension keys (input_ids, labels, attention_mask) to avoid
-    picking up non-batch tensors. Returns 0 if batch size cannot be determined.
+    Uses _BATCH_DIM_KEYS to identify tensors whose dim-0 is the batch dimension.
+    Returns 0 if batch size cannot be determined.
     """
-    _BATCH_KEYS = ("input_ids", "labels", "attention_mask")
     sizes = set()
-    for key in _BATCH_KEYS:
+    for key in _BATCH_DIM_KEYS:
         if key in batch_data and isinstance(batch_data[key], torch.Tensor) and batch_data[key].dim() > 0:
             sizes.add(batch_data[key].size(0))
     if len(sizes) == 1:
@@ -1495,6 +1496,15 @@ def _get_batch_size(batch_data: Dict[str, torch.Tensor]) -> int:
         logger.warning(f"Inconsistent batch sizes across keys: {sizes}, using min")
         return min(sizes)
     return 0
+
+
+def _get_sliceable_keys(batch_data: Dict[str, torch.Tensor], batch_size: int) -> set:
+    """Identify keys in batch_data whose dim-0 matches batch_size (safe to slice)."""
+    keys = set()
+    for k, v in batch_data.items():
+        if isinstance(v, torch.Tensor) and v.dim() > 0 and v.size(0) == batch_size:
+            keys.add(k)
+    return keys
 
 
 def _flatten(tensors: List[torch.Tensor]) -> torch.Tensor:
