@@ -715,25 +715,28 @@ def hvp_apply(
     # Micro-batch HVP to avoid OOM on large batches
     mbs = cfg.hvp_micro_batch_size
     batch_size = _get_batch_size(batch_data)
+    if batch_size == 0:
+        logger.warning("Could not infer batch size from batch_data, falling back to full-batch HVP")
+        return _hvp_single(batch_data)
     if mbs <= 0 or batch_size <= mbs:
         return _hvp_single(batch_data)
 
-    # Split batch into micro-batches, compute HVP on each, average
+    # Split batch into micro-batches, compute HVP on each, weighted average
     hvp_acc = torch.zeros_like(v)
-    n_chunks = 0
+    total_samples = 0
     for start_idx in range(0, batch_size, mbs):
         end_idx = min(start_idx + mbs, batch_size)
+        chunk_size = end_idx - start_idx
         micro = {
             k: val[start_idx:end_idx] if isinstance(val, torch.Tensor) and val.dim() > 0 and val.size(0) == batch_size else val
             for k, val in batch_data.items()
         }
         chunk_hvp = _hvp_single(micro)
-        hvp_acc += chunk_hvp * (end_idx - start_idx)
-        n_chunks += (end_idx - start_idx)
+        hvp_acc += chunk_hvp * chunk_size
+        total_samples += chunk_size
         del micro, chunk_hvp
-        torch.cuda.empty_cache()
 
-    return hvp_acc / n_chunks
+    return hvp_acc / total_samples
 
 
 def compute_noise_sigma(
