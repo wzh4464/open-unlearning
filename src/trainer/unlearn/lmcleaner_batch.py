@@ -321,6 +321,31 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                 max_cache_entries=4,
             )
 
+        # Create lazy u[t] provider for on-demand recomputation
+        # When pkls are missing (non-forget steps), recompute u[t] = -η*grad
+        u_provider = None
+        if self.use_historical_params and self.batch_reconstructor is not None and self.lazy_loader is not None:
+            from .lazy_u_provider import LazyUProvider
+            # Load sample_indices and eta_cache
+            si_map = getattr(self.lazy_loader, "sample_indices", {})
+            eta_map = self.lazy_loader.get_etas_for_steps(list(range(tau + 1)))
+            finetune_dataset = getattr(self.batch_reconstructor, "dataset", None)
+            collator = getattr(self.batch_reconstructor, "collator", None)
+            if finetune_dataset is not None and si_map:
+                u_provider = LazyUProvider(
+                    lazy_loader=self.lazy_loader,
+                    model=self.model,
+                    dataset=finetune_dataset,
+                    sample_indices=si_map,
+                    eta_cache=eta_map,
+                    collator=collator,
+                    device=str(next(self.model.parameters()).device),
+                )
+                logger.info(
+                    f"LazyUProvider initialized: will recompute u[t] for "
+                    f"steps without saved pkl"
+                )
+
         for i, tz in enumerate(forget_steps):
             logger.info(f"Processing forget step {i + 1}/{len(forget_steps)}: tz={tz}")
             _step_start_time = time.perf_counter()
@@ -362,6 +387,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                     initial_record=initial_record,  # 传入初始记录
                     use_historical_params=self.use_historical_params,
                     historical_param_provider=historical_param_provider,
+                    u_provider=u_provider,
                 )
 
                 # Phase 3: 应用校正
