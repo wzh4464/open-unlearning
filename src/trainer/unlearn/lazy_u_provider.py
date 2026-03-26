@@ -139,31 +139,16 @@ class LazyUProvider:
                 loss = outputs.loss
                 loss.backward()
             else:
-                # Micro-batch accumulation
-                input_ids = batch.get("input_ids")
-                labels = batch.get("labels")
-                attention_mask = batch.get("attention_mask")
-
-                total_loss = 0.0
-                n_micro = 0
+                # Micro-batch accumulation: slice all tensor fields generically
+                n_micro_batches = (total_samples + self.micro_batch_size - 1) // self.micro_batch_size
                 for start in range(0, total_samples, self.micro_batch_size):
                     end = min(start + self.micro_batch_size, total_samples)
                     micro = {
-                        "input_ids": input_ids[start:end],
-                        "labels": labels[start:end],
+                        k: v[start:end] if isinstance(v, torch.Tensor) and v.shape[0] == total_samples else v
+                        for k, v in batch.items()
                     }
-                    if attention_mask is not None:
-                        micro["attention_mask"] = attention_mask[start:end]
-
                     outputs = self.model(**micro)
-                    # Scale loss for gradient accumulation
-                    scaled_loss = outputs.loss / (
-                        (total_samples + self.micro_batch_size - 1)
-                        // self.micro_batch_size
-                    )
-                    scaled_loss.backward()
-                    total_loss += outputs.loss.item()
-                    n_micro += 1
+                    (outputs.loss / n_micro_batches).backward()
 
             # Collect gradient → u = -η * grad
             grads = []
