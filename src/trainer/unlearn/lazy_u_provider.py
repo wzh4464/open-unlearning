@@ -117,7 +117,7 @@ class LazyUProvider:
 
         # Get sample indices
         indices = self.sample_indices.get(step_id)
-        if indices is None:
+        if not indices:
             logger.warning(f"Cannot recompute u[{step_id}]: no sample_indices")
             return None
 

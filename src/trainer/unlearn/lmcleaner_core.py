@@ -447,6 +447,36 @@ def hvp_diagonal(
     return diag_H_full * v
 
 
+def _load_u_for_step(
+    t: int,
+    step_log: Optional["StepLog"] = None,
+    lazy_loader: Optional["LazyLoaderProtocol"] = None,
+    use_lazy_loading: bool = False,
+    u_provider=None,
+) -> Optional[torch.Tensor]:
+    """Shared helper: load u[t] from pkl → step_log → u_provider (recompute)."""
+    # Try pkl
+    if use_lazy_loading and lazy_loader is not None:
+        rec_dict = lazy_loader.load_single_step(t, include_tensors=True)
+        if rec_dict is not None:
+            u_val = rec_dict.get("u")
+            del rec_dict
+            if u_val is not None and isinstance(u_val, torch.Tensor):
+                return u_val
+
+    # Try step_log (in-memory)
+    if step_log is not None:
+        srec_tmp = step_log[t]
+        if srec_tmp is not None and srec_tmp.u is not None:
+            return srec_tmp.u
+
+    # Fall back to LazyUProvider (recompute u[t] = -η * grad)
+    if u_provider is not None:
+        return u_provider.get_u(t)
+
+    return None
+
+
 class HistoricalParamContext:
     """Context manager that temporarily sets model to historical θ[s] during propagation.
 
@@ -503,26 +533,13 @@ class HistoricalParamContext:
         lazy_loader: Optional["LazyLoaderProtocol"],
         use_lazy_loading: bool,
     ) -> Optional[torch.Tensor]:
-        # Try pkl first
-        if use_lazy_loading and lazy_loader is not None:
-            rec_dict = lazy_loader.load_single_step(t, include_tensors=True)
-            if rec_dict is not None:
-                u_val = rec_dict.get("u")
-                del rec_dict
-                if u_val is not None and isinstance(u_val, torch.Tensor) and u_val.norm() > 0:
-                    return u_val
-        elif step_log is not None:
-            srec_tmp = step_log[t]
-            if srec_tmp is not None and srec_tmp.u is not None:
-                return srec_tmp.u
-
-        # Fall back to LazyUProvider (recompute u[t] = -η * grad)
-        if self._u_provider is not None:
-            u_val = self._u_provider.get_u(t)
-            if u_val is not None:
-                return u_val
-
-        return None
+        return _load_u_for_step(
+            t,
+            step_log=step_log,
+            lazy_loader=lazy_loader,
+            use_lazy_loading=use_lazy_loading,
+            u_provider=self._u_provider,
+        )
 
     def _try_load(
         self,
@@ -1185,24 +1202,14 @@ def compute_correction(
                 )
         else:
             # Legacy inline reconstruction (for backward compatibility)
-            # 辅助函数: 加载单步的 u 向量 (pkl first, then recompute via u_provider)
             def _load_u(t: int) -> Optional[torch.Tensor]:
-                # Try pkl
-                if use_lazy_loading and lazy_loader is not None:
-                    rec_dict = lazy_loader.load_single_step(t, include_tensors=True)
-                    if rec_dict is not None:
-                        u_val = rec_dict.get("u")
-                        del rec_dict
-                        if u_val is not None and isinstance(u_val, torch.Tensor) and u_val.norm() > 0:
-                            return u_val
-                elif step_log is not None:
-                    srec_tmp = step_log[t]
-                    if srec_tmp is not None and srec_tmp.u is not None:
-                        return srec_tmp.u
-                # Fall back to LazyUProvider
-                if u_provider is not None:
-                    return u_provider.get_u(t)
-                return None
+                return _load_u_for_step(
+                    t,
+                    step_log=step_log,
+                    lazy_loader=lazy_loader,
+                    use_lazy_loading=use_lazy_loading,
+                    u_provider=u_provider,
+                )
 
             # Phase A: 收集传播窗口 [start, end] 内的 u 向量
             _missing_u = False

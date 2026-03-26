@@ -324,7 +324,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # Create lazy u[t] provider for on-demand recomputation
         # When pkls are missing (non-forget steps), recompute u[t] = -η*grad
         u_provider = None
-        if self.use_historical_params and self.batch_reconstructor is not None:
+        if self.use_historical_params and self.batch_reconstructor is not None and self.lazy_loader is not None:
             from .lazy_u_provider import LazyUProvider
             # Load sample_indices and eta_cache
             si_map = getattr(self.lazy_loader, "sample_indices", {})
