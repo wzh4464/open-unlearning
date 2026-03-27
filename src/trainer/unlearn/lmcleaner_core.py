@@ -912,16 +912,20 @@ def inject_subspace_noise(
     v_flat = v.view(-1)
     d = v_flat.numel()
 
-    z = torch.randn(d, dtype=v.dtype, device=v.device, generator=generator)
+    # Do projection on CPU to avoid GPU OOM (Q is d×k, ~49GB for 1.24B×10)
+    # Only final noise vector is moved to v's device
+    z = torch.randn(d, dtype=torch.float32, generator=generator)  # CPU
+    Q = projector_Q.float()  # CPU, float32
 
-    # Project z onto subspace: z_∥ = Q @ (Q^T @ z)
-    Q = projector_Q.to(v.device, v.dtype)
-    coeffs = Q.T @ z  # (k,)
-    z_parallel = Q @ coeffs  # (d,)
+    coeffs = Q.T @ z  # (k,) — cheap
+    z_parallel = Q @ coeffs  # (d,) — one matmul on CPU
     z_perp = z - z_parallel
 
-    noise = sigma_parallel * z_parallel + sigma_perp * z_perp
-    noise_norm = float(noise.norm().item())
+    noise_cpu = sigma_parallel * z_parallel + sigma_perp * z_perp
+    noise_norm = float(noise_cpu.norm().item())
+
+    noise = noise_cpu.to(v_flat.device, v_flat.dtype)
+    del z, z_parallel, z_perp, noise_cpu
 
     return (v_flat + noise).view(orig_shape), noise_norm
 
