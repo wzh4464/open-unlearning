@@ -10,19 +10,24 @@ def _get_reference_group(reference_logs, preferred_key):
         return reference_logs[preferred_key]
     if len(reference_logs) == 1:
         return next(iter(reference_logs.values()))
-    raise KeyError(
-        f"Reference logs must include '{preferred_key}' or contain exactly one entry."
+    logger.warning(
+        "Reference logs has multiple entries but none match '%s', returning None",
+        preferred_key,
     )
+    return None
 
 
 def _extract_distribution(metric_result, value_key=None):
     values = []
+    skipped = 0
     value_by_index = metric_result["value_by_index"]
     for evals in value_by_index.values():
         if evals is None:
             continue
         if value_key is not None:
             value = evals.get(value_key)
+            if value is None and value_key not in evals:
+                skipped += 1
         elif "score" in evals:
             value = evals["score"]
         else:
@@ -39,6 +44,12 @@ def _extract_distribution(metric_result, value_key=None):
             value = numeric_items[0]
         if value is not None:
             values.append(value)
+    if skipped > 0:
+        logger.warning(
+            "%d entries missing key '%s' were skipped in _extract_distribution",
+            skipped,
+            value_key,
+        )
     return np.array(values)
 
 
@@ -150,19 +161,35 @@ def selectivity(model, **kwargs):
         )
         return {"agg_value": None}
 
-    values = {
+    raw_values = {
         "current_forget": current_forget,
         "current_retain": current_retain,
         "reference_forget": reference_forget,
         "reference_retain": reference_retain,
     }
-    invalid = [k for k, v in values.items() if v is None or (isinstance(v, float) and np.isnan(v))]
+    invalid = []
+    for name, v in raw_values.items():
+        if v is None:
+            invalid.append(name)
+        elif not np.isscalar(v):
+            invalid.append(name)
+        else:
+            try:
+                if np.isnan(v):
+                    invalid.append(name)
+            except (TypeError, ValueError):
+                invalid.append(name)
     if invalid:
         logger.warning(
-            "Required metrics contain None or NaN (%s), setting selectivity to None",
+            "Required metrics contain None, NaN, or non-scalar (%s), setting selectivity to None",
             ", ".join(invalid),
         )
         return {"agg_value": None}
+
+    current_forget = float(current_forget)
+    current_retain = float(current_retain)
+    reference_forget = float(reference_forget)
+    reference_retain = float(reference_retain)
 
     forget_drop = (reference_forget - current_forget) / (abs(reference_forget) + eps)
     retain_drop = (reference_retain - current_retain) / (abs(reference_retain) + eps)
