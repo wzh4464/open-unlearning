@@ -18,7 +18,7 @@ HESSIAN_MODE="GGN"
 DAMPING="1e-4"
 
 # Paper-faithful noise params
-DELTA_CERT=0.02  # Conservative public bound: max ||u[t]|| ≈ 0.0157, rounded up
+DELTA_CERT=0.03  # Public bound: max ||u[t]|| = 0.0275 for B=16, rounded up
 BETA=0.1         # Concentration factor
 PROJ_RANK=100    # Π_k rank
 PROJ_SEED=42     # Public randomness seed
