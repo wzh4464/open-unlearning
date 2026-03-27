@@ -172,8 +172,9 @@ def main():
 
     # Try to print key metrics table
     key_metrics = [
-        "model_utility", "forget_quality", "forget_Truth_Ratio",
-        "extraction_strength", "time_seconds", "peak_gpu_mb"
+        "model_utility", "forget_quality", "forget_prob_ks",
+        "selectivity", "forget_Q_A_Prob", "retain_Q_A_Prob",
+        "forget_truth_ratio", "privleak", "time_seconds", "peak_gpu_mb"
     ]
     available_keys = [k for k in key_metrics if any(k in r for r in rows)]
     if available_keys:

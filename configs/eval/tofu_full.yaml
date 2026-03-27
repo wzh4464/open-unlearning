@@ -7,7 +7,9 @@ defaults:
     - forget_Truth_Ratio
     - forget_quality
     - forget_Q_A_Prob
+    - forget_prob_ks
     - forget_Q_A_ROUGE
+    - selectivity
     # Model utility
     - model_utility
     # Privacy metrics
@@ -41,5 +43,6 @@ overwrite: false
 forget_split: forget10
 holdout_split: holdout10
 retain_logs_path: null
+original_logs_path: null
 question_key: "question"
 batch_size: 32
