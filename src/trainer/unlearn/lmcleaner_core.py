@@ -56,10 +56,19 @@ class AuditRecord(dict):
     mode: str = "GGN"  # Hessian模式: "fisher", "GGN", "diag", "exact"
     damping: float = 0.0  # 阻尼系数 (实现添加，论文未包含)
     # Phase 4: 隐私噪声相关
-    noise_sigma: float = 0.0  # 注入的噪声标准差 σ
+    noise_sigma: float = 0.0  # Legacy isotropic σ (kept for backward compat)
     noise_injected: bool = False  # 是否注入了隐私噪声
     epsilon: float = 0.0  # (ε,δ)-certified unlearning 的 ε
     delta: float = 0.0  # (ε,δ)-certified unlearning 的 δ
+    # Subspace-aware noise (Eq. 13-15 of paper)
+    noise_mode: str = "none"  # "none" | "isotropic" | "subspace"
+    sigma_parallel: float = 0.0  # σ_∥ for top-k subspace
+    sigma_perp: float = 0.0  # σ_⊥ for orthogonal complement
+    beta: float = 1.0  # concentration factor β ∈ (0,1]
+    projector_rank: int = 0  # k in Π_k
+    delta_cert: float = 0.0  # Δ̄_cert(K) public sensitivity bound
+    correction_norm: float = 0.0  # ||μ_K||₂
+    noise_norm: float = 0.0  # ||ξ||₂
     # 历史参数重建
     used_historical_params: bool = False  # 是否实际使用了历史 θ[s]
     # 效率追踪
@@ -67,22 +76,7 @@ class AuditRecord(dict):
 
     def __post_init__(self):
         # 使其可以像字典一样使用
-        dict.__init__(
-            self,
-            tz=self.tz,
-            tau=self.tau,
-            K_used=self.K_used,
-            v_norm=self.v_norm,
-            hvp_calls=self.hvp_calls,
-            mode=self.mode,
-            damping=self.damping,
-            noise_sigma=self.noise_sigma,
-            noise_injected=self.noise_injected,
-            epsilon=self.epsilon,
-            delta=self.delta,
-            used_historical_params=self.used_historical_params,
-            wall_time_ms=self.wall_time_ms,
-        )
+        dict.__init__(self, **{f.name: getattr(self, f.name) for f in self.__dataclass_fields__.values()})
 
 
 @dataclass
@@ -762,26 +756,10 @@ def compute_noise_sigma(
     delta: float,
 ) -> float:
     """
-    计算隐私噪声的标准差 σ (论文 Theorem 2)
+    Isotropic fallback: σ_iso = (Δ_det / ε) * sqrt(2 log(1.25/δ))
 
-    论文公式:
-        σ ≥ (Δ_det / ε) * sqrt(2 * log(1.25 / δ))
-
-    其中:
-    - Δ_det: 近似误差上界 (deterministic approximation error bound)
-    - ε: 隐私参数 epsilon
-    - δ: 隐私参数 delta
-
-    Args:
-        delta_det: 近似误差上界 ||θ̂ - θ_ideal||₂ ≤ Δ_det
-        epsilon: 隐私参数 ε > 0
-        delta: 隐私参数 δ ∈ (0, 1)
-
-    Returns:
-        噪声标准差 σ
-
-    Note:
-        delta_det = 0 is valid (results in sigma = 0, meaning no noise needed).
+    Kept for backward compatibility. Use compute_subspace_noise_params for
+    the paper's subspace-aware calibration (Eq. 14-15).
     """
     if delta_det < 0:
         raise ValueError(f"delta_det must be >= 0, got {delta_det}")
@@ -794,39 +772,139 @@ def compute_noise_sigma(
     return sigma
 
 
+def compute_subspace_noise_params(
+    delta_cert: float,
+    epsilon: float,
+    delta: float,
+    beta: float = 1.0,
+) -> Tuple[float, float]:
+    """
+    Paper Eq. 14-15: Subspace-aware noise calibration.
+
+    Splits privacy budget (ε/2, δ/2) across parallel and orthogonal components:
+        σ_∥ = (2 Δ̄_cert(K) / ε) * sqrt(2 log(2.5/δ))      (Eq. 14)
+        σ_⊥ = (2β Δ̄_cert(K) / ε) * sqrt(2 log(2.5/δ))     (Eq. 15)
+
+    Args:
+        delta_cert: Public sensitivity upper bound Δ̄_cert(K)
+        epsilon: Privacy parameter ε > 0
+        delta: Privacy parameter δ ∈ (0, 1)
+        beta: Concentration factor β ∈ (0, 1], controls noise reduction
+              outside top-k subspace. β=1 makes σ_⊥ = σ_∥ (isotropic).
+
+    Returns:
+        (sigma_parallel, sigma_perp)
+    """
+    if delta_cert < 0:
+        raise ValueError(f"delta_cert must be >= 0, got {delta_cert}")
+    if epsilon <= 0:
+        raise ValueError(f"epsilon must be > 0, got {epsilon}")
+    if delta <= 0 or delta >= 1:
+        raise ValueError(f"delta must be in (0, 1), got {delta}")
+    if beta <= 0 or beta > 1:
+        raise ValueError(f"beta must be in (0, 1], got {beta}")
+
+    # The 2 in numerator comes from budget splitting: each block gets (ε/2, δ/2)
+    # 2.5/δ instead of 1.25/δ because δ → δ/2
+    multiplier = math.sqrt(2 * math.log(2.5 / delta))
+    sigma_parallel = (2 * delta_cert / epsilon) * multiplier
+    sigma_perp = (2 * beta * delta_cert / epsilon) * multiplier
+
+    return sigma_parallel, sigma_perp
+
+
+def build_public_projector(
+    d: int,
+    k: int,
+    seed: int = 42,
+    device: str = "cpu",
+) -> torch.Tensor:
+    """
+    Build a fixed public random projector Π_k (d×k orthonormal matrix).
+
+    Paper Appendix C.5: "from public randomness" — a fixed random
+    k-dimensional subspace independent of the training data.
+
+    The projector Π_k satisfies: Π_k @ Π_k^T is the rank-k projection matrix.
+    We store Q (d×k) such that Π_k = Q @ Q^T.
+
+    Args:
+        d: Parameter dimension
+        k: Subspace rank (k << d)
+        seed: Fixed seed for reproducibility (public randomness)
+        device: Device for the projector
+
+    Returns:
+        Q: Orthonormal basis matrix of shape (d, k)
+    """
+    gen = torch.Generator(device="cpu")
+    gen.manual_seed(seed)
+    # Generate random matrix and orthogonalize via QR
+    # For memory efficiency with large d, use chunked random generation
+    A = torch.randn(d, k, generator=gen, dtype=torch.float32)
+    Q, _ = torch.linalg.qr(A)
+    return Q.to(device)
+
+
 def inject_privacy_noise(
     v: torch.Tensor,
     sigma: float,
     generator: Optional[torch.Generator] = None,
 ) -> torch.Tensor:
     """
-    注入隐私噪声 (论文 Algorithm 1 Phase 4)
-
-    论文公式:
-        θ̃[τ] ← θ̂[τ] + N(0, σ²I)
-
-    Args:
-        v: 校正向量 (将被添加噪声)
-        sigma: 噪声标准差 σ
-        generator: 随机数生成器 (用于可复现性)
-
-    Returns:
-        添加噪声后的向量: v + N(0, σ²I)
+    Isotropic noise injection: v + N(0, σ²I). Kept for backward compatibility.
     """
     if sigma <= 0:
         return v
-
-    noise = (
-        torch.randn(
-            v.shape,
-            dtype=v.dtype,
-            device=v.device,
-            generator=generator,
-        )
-        * sigma
-    )
-
+    noise = torch.randn(v.shape, dtype=v.dtype, device=v.device, generator=generator) * sigma
     return v + noise
+
+
+def inject_subspace_noise(
+    v: torch.Tensor,
+    sigma_parallel: float,
+    sigma_perp: float,
+    projector_Q: torch.Tensor,
+    generator: Optional[torch.Generator] = None,
+) -> Tuple[torch.Tensor, float]:
+    """
+    Paper Eq. 13: Subspace-aware noise injection.
+
+        ξ = ξ_∥ + ξ_⊥
+        ξ_∥ ~ N(0, σ²_∥ Π_k)       [noise in top-k subspace]
+        ξ_⊥ ~ N(0, σ²_⊥ (I - Π_k)) [noise in orthogonal complement]
+
+    Implementation:
+        z ~ N(0, I_d)
+        z_∥ = Q @ (Q^T @ z)    [project onto subspace]
+        z_⊥ = z - z_∥           [orthogonal component]
+        ξ = σ_∥ * z_∥ + σ_⊥ * z_⊥
+
+    Args:
+        v: Correction vector to add noise to
+        sigma_parallel: σ_∥
+        sigma_perp: σ_⊥
+        projector_Q: Orthonormal basis Q of shape (d, k)
+        generator: Random generator for reproducibility
+
+    Returns:
+        (v + ξ, ||ξ||₂)
+    """
+    if sigma_parallel <= 0 and sigma_perp <= 0:
+        return v, 0.0
+
+    z = torch.randn(v.shape, dtype=v.dtype, device=v.device, generator=generator)
+
+    # Project z onto subspace: z_∥ = Q @ (Q^T @ z)
+    Q = projector_Q.to(v.device, v.dtype)
+    coeffs = Q.T @ z  # (k,)
+    z_parallel = Q @ coeffs  # (d,)
+    z_perp = z - z_parallel
+
+    noise = sigma_parallel * z_parallel + sigma_perp * z_perp
+    noise_norm = float(noise.norm().item())
+
+    return v + noise, noise_norm
 
 
 class HistoricalParamProvider:
@@ -1114,6 +1192,11 @@ def compute_correction(
     epsilon: float = 0.0,
     delta: float = 1e-5,
     delta_det: Optional[float] = None,
+    # Subspace-aware noise (paper Eq. 13-15)
+    noise_mode: str = "subspace",  # "subspace" | "isotropic" | "none"
+    beta: float = 0.1,  # concentration factor β ∈ (0,1]
+    projector_rank: int = 100,  # k for Π_k
+    projector_seed: int = 42,  # seed for public random projector
     # On-demand loading support for large K values
     lazy_loader: Optional[LazyLoaderProtocol] = None,
     initial_record: Optional[StepRecord] = None,
@@ -1416,34 +1499,55 @@ def compute_correction(
     # 记录 Phase 3 前的 v_norm
     v_norm_before_noise = float(v.norm().item())
 
-    # Phase 4: 隐私噪声注入 (论文 Algorithm 1)
-    noise_sigma = 0.0
-    noise_injected = False
+    # Phase 4: 隐私噪声注入 (论文 Algorithm 1, Eq. 13-15)
+    _noise_sigma = 0.0  # legacy isotropic sigma
+    _sigma_par = 0.0
+    _sigma_perp = 0.0
+    _noise_norm = 0.0
+    _noise_injected = False
+    _actual_noise_mode = "none"
 
-    if epsilon > 0:
-        # 如果未提供 delta_det, 使用 v_norm 作为估计
-        # WARNING: v_norm 不是 ||θ̂ - θ_ideal||₂ 的保证上界
-        # 根据 Theorem 2, 应该提供一个经过证明的 Δ_det 上界
-        # 使用 v_norm 可能导致 σ 过小，从而无法保证 (ε,δ)-certified unlearning
+    if epsilon > 0 and noise_mode != "none":
+        # Determine sensitivity bound Δ̄_cert(K)
         if delta_det is None:
             logger.warning(
                 "delta_det not provided, using v_norm as estimate. "
-                "This may not be a valid upper bound for certified unlearning. "
-                "For guaranteed (ε,δ)-certified unlearning, provide a proven Δ_det bound."
+                "For guaranteed (ε,δ)-certified unlearning, provide a proven Δ̄_cert(K) bound."
             )
             delta_det = v_norm_before_noise
 
-        # 计算噪声标准差
-        noise_sigma = compute_noise_sigma(delta_det, epsilon, delta)
+        if noise_mode == "subspace" and projector_rank > 0:
+            # Paper Eq. 14-15: subspace-aware noise
+            _sigma_par, _sigma_perp = compute_subspace_noise_params(
+                delta_cert=delta_det, epsilon=epsilon, delta=delta, beta=beta,
+            )
+            d = v.numel()
+            k = min(projector_rank, d)
+            Q = build_public_projector(d, k, seed=projector_seed, device=v.device)
+            v, _noise_norm = inject_subspace_noise(v, _sigma_par, _sigma_perp, Q)
+            _noise_injected = True
+            _actual_noise_mode = "subspace"
+            _noise_sigma = _sigma_par  # legacy field: use σ_∥ for compat
+            del Q
 
-        # 注入噪声
-        v = inject_privacy_noise(v, noise_sigma)
-        noise_injected = True
+            logger.info(
+                f"Phase 4: Subspace noise σ_∥={_sigma_par:.6f}, σ_⊥={_sigma_perp:.6f} "
+                f"(β={beta}, k={k}, ε={epsilon}, δ={delta}), ||ξ||={_noise_norm:.4f}"
+            )
+        else:
+            # Isotropic fallback (β=1, Π_k=I)
+            _noise_sigma = compute_noise_sigma(delta_det, epsilon, delta)
+            v = inject_privacy_noise(v, _noise_sigma)
+            _noise_norm = 0.0  # not tracked for isotropic
+            _noise_injected = True
+            _actual_noise_mode = "isotropic"
+            _sigma_par = _noise_sigma
+            _sigma_perp = _noise_sigma
 
-        logger.info(
-            f"Phase 4: Injected privacy noise with σ={noise_sigma:.6f} "
-            f"(ε={epsilon}, δ={delta})"
-        )
+            logger.info(
+                f"Phase 4: Isotropic noise σ={_noise_sigma:.6f} "
+                f"(ε={epsilon}, δ={delta})"
+            )
 
     # 创建审计记录
     audit = AuditRecord(
@@ -1454,10 +1558,18 @@ def compute_correction(
         hvp_calls=hvp_calls,
         mode=cfg.hessian_mode,
         damping=cfg.damping,
-        noise_sigma=noise_sigma,
-        noise_injected=noise_injected,
-        epsilon=epsilon if noise_injected else 0.0,
-        delta=delta if noise_injected else 0.0,
+        noise_sigma=_noise_sigma,
+        noise_injected=_noise_injected,
+        epsilon=epsilon if _noise_injected else 0.0,
+        delta=delta if _noise_injected else 0.0,
+        noise_mode=_actual_noise_mode,
+        sigma_parallel=_sigma_par,
+        sigma_perp=_sigma_perp,
+        beta=beta,
+        projector_rank=projector_rank if _actual_noise_mode == "subspace" else 0,
+        delta_cert=delta_det if delta_det is not None else 0.0,
+        correction_norm=v_norm_before_noise,
+        noise_norm=_noise_norm,
         used_historical_params=_do_historical,
     )
 

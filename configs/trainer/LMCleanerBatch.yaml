@@ -49,6 +49,15 @@ method_args:
   # ! 详见 docs/historical_params_hvp.md
   use_historical_params: true
 
+  # Phase 4: Subspace-aware noise (paper Eq. 13-15)
+  # "subspace" = paper version with Π_k projector and split budget
+  # "isotropic" = fallback N(0, σ²I) with single budget
+  # "none" = skip noise entirely (Removal-Only mode)
+  noise_mode: subspace
+  beta: 0.1       # concentration factor β ∈ (0,1]
+  projector_rank: 100  # rank k of public projector Π_k
+  projector_seed: 42   # deterministic public randomness seed
+
   # HVP micro-batch size for large training batches
   # 0 = use full batch (default); >0 = split batch into chunks to avoid OOM
   # Recommended: 32 or 64 when training batch size >= 128
