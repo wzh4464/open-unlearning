@@ -302,6 +302,13 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             self.unlearning_applied = True
             return
 
+        # Ensure model is on GPU before unlearning (train() calls _apply_unlearning
+        # before super().train() which is where accelerator.prepare moves model to GPU)
+        if torch.cuda.is_available() and not next(self.model.parameters()).is_cuda:
+            self.model = self.model.cuda()
+            self.hvp_config.device = "cuda"
+            logger.info(f"Moved model to GPU for unlearning")
+
         params = [p for p in self.model.parameters() if p.requires_grad]
 
         self.num_affected_batches = len(forget_steps)
@@ -324,15 +331,15 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             )
 
         # Create lazy u[t] provider for on-demand recomputation
-        # When pkls are missing (non-forget steps), recompute u[t] = -η*grad
+        # Recompute u[t] = -η*grad instead of loading 6GB pkl from disk (~0.6s vs ~38s)
         u_provider = None
-        if self.use_historical_params and self.batch_reconstructor is not None and self.lazy_loader is not None:
+        if self.batch_reconstructor is not None and self.lazy_loader is not None:
             from .lazy_u_provider import LazyUProvider
             # Load sample_indices and eta_cache
             si_map = getattr(self.lazy_loader, "sample_indices", {})
             eta_map = self.lazy_loader.get_etas_for_steps(list(range(tau + 1)))
             finetune_dataset = getattr(self.batch_reconstructor, "dataset", None)
-            collator = getattr(self.batch_reconstructor, "collator", None)
+            collator = getattr(self.batch_reconstructor, "data_collator", None)
             if finetune_dataset is not None and si_map:
                 u_provider = LazyUProvider(
                     lazy_loader=self.lazy_loader,
@@ -353,26 +360,37 @@ class LMCleanerBatchLevel(UnlearnTrainer):
             _step_start_time = time.perf_counter()
 
             try:
-                # 只加载初始记录 (tz 对应的记录，用于 Phase 1)
+                # Load metadata only (fast, no 6GB tensor I/O)
                 initial_rec_dict = self.lazy_loader.load_single_step(
-                    tz, include_tensors=True
+                    tz, include_tensors=False
                 )
 
                 if initial_rec_dict is None:
                     logger.warning(f"No record found for step {tz}, skipping")
                     continue
 
+                # Get u[tz] via recomputation (0.6s) instead of disk load (38s)
+                u_tz = None
+                if u_provider is not None:
+                    u_tz = u_provider.get_u(tz)
+                if u_tz is None:
+                    # Fallback: load from disk
+                    full_rec = self.lazy_loader.load_single_step(tz, include_tensors=True)
+                    if full_rec is not None:
+                        u_tz = full_rec.get("u")
+                    del full_rec
+
                 # 创建初始 StepRecord
                 initial_record = StepRecord(
                     step_id=initial_rec_dict["step_id"],
                     eta=initial_rec_dict["eta"],
                     batch_id=initial_rec_dict["batch_id"],
-                    u=initial_rec_dict.get("u"),
+                    u=u_tz,
                     gbar=initial_rec_dict.get("gbar"),
                     diag_H=initial_rec_dict.get("diag_H"),
                     batch_data=initial_rec_dict.get("batch_data"),
                 )
-                del initial_rec_dict  # 释放原始 dict
+                del initial_rec_dict
 
                 # 调用核心计算函数 (使用 lazy loading 模式)
                 v, audit = compute_correction(
