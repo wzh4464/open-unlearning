@@ -1308,17 +1308,20 @@ def compute_correction(
         del rec
         gc.collect()
 
-    # Noise-Only mode: zero out correction, skip Phase 2-3 entirely
+    # Noise-Only mode: zero out v and skip Phase 2 entirely
     if skip_correction:
         v = torch.zeros_like(v)
-        logger.info(f"skip_correction=True: zeroed v for noise-only mode (tz={tz})")
-
-    # Phase 2: 前向传播窗口
-    start = tz + 1
-    end = min(tz + K, tau - 1)
-    K_used = max(0, end - start + 1)
-
-    hvp_calls = 0
+        start = tz + 1
+        end = tz  # empty range → Phase 2 loop won't execute
+        K_used = 0
+        hvp_calls = 0
+        logger.info(f"skip_correction=True: noise-only mode (tz={tz}), skipping Phase 2")
+    else:
+        # Phase 2: 前向传播窗口
+        start = tz + 1
+        end = min(tz + K, tau - 1)
+        K_used = max(0, end - start + 1)
+        hvp_calls = 0
 
     # 检查是否有足够的步骤记录 (only for non-lazy mode)
     if not use_lazy_loading and step_log is not None:
@@ -1552,12 +1555,19 @@ def compute_correction(
             )
             d = v.numel()
             k = min(projector_rank, d)
-            Q = build_public_projector(d, k, seed=projector_seed, device=v.device)
+            # Cache projector: (d, k, seed) is fixed across all forget steps
+            _cache_key = (d, k, projector_seed)
+            if not hasattr(compute_correction, "_projector_cache"):
+                compute_correction._projector_cache = {}
+            if _cache_key not in compute_correction._projector_cache:
+                compute_correction._projector_cache[_cache_key] = build_public_projector(
+                    d, k, seed=projector_seed, device="cpu"
+                )
+            Q = compute_correction._projector_cache[_cache_key]
             v, _noise_norm = inject_subspace_noise(v, _sigma_par, _sigma_perp, Q)
             _noise_injected = True
             _actual_noise_mode = "subspace"
             _noise_sigma = _sigma_par  # legacy field: use σ_∥ for compat
-            del Q
 
             logger.info(
                 f"Phase 4: Subspace noise σ_∥={_sigma_par:.6f}, σ_⊥={_sigma_perp:.6f} "
