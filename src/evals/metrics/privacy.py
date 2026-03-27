@@ -3,32 +3,104 @@ from scipy.stats import ks_2samp
 from evals.metrics.base import unlearning_metric, logger
 
 
+def _get_reference_group(reference_logs, preferred_key):
+    if not reference_logs:
+        return None
+    if preferred_key in reference_logs:
+        return reference_logs[preferred_key]
+    if len(reference_logs) == 1:
+        return next(iter(reference_logs.values()))
+    logger.warning(
+        "Reference logs has multiple entries but none match '%s', returning None",
+        preferred_key,
+    )
+    return None
+
+
+def _extract_distribution(metric_result, value_key=None):
+    value_by_index = metric_result["value_by_index"]
+
+    def _get_value(evals):
+        if evals is None:
+            return None, False
+        if value_key is not None:
+            if value_key in evals:
+                return evals[value_key], False
+            return None, True
+        if "score" in evals:
+            return evals["score"], False
+        numeric_items = [
+            v
+            for v in evals.values()
+            if isinstance(v, (int, float, np.integer, np.floating))
+        ]
+        if len(numeric_items) != 1:
+            raise KeyError(
+                "Could not infer which scalar field to compare. "
+                "Pass value_key explicitly."
+            )
+        return numeric_items[0], False
+
+    values = []
+    skipped = 0
+    for evals in value_by_index.values():
+        value, was_skipped = _get_value(evals)
+        if was_skipped:
+            skipped += 1
+        if value is not None:
+            values.append(value)
+
+    if skipped > 0:
+        logger.warning(
+            "%d entries missing key '%s' were skipped in _extract_distribution",
+            skipped,
+            value_key,
+        )
+    return np.array(values)
+
+
 @unlearning_metric(name="ks_test")
 def ks_test(model, **kwargs):
-    """Compare two forget and retain model distributions with a 2-sample KS-test and report the p-value.
-    Used in the TOFU benchmark as forget_quality when computed over the truth_ratio statistic."""
-    forget_tr_stats = np.array(
-        [
-            evals["score"]
-            for evals in kwargs["pre_compute"]["forget"]["value_by_index"].values()
-        ]
+    """Compare two scalar per-example distributions with a 2-sample KS-test.
+
+    This is used for TOFU forget_quality when the compared statistic is truth_ratio,
+    but it also supports probability-based comparisons when value_key is provided.
+    """
+    current_key = kwargs.get("current_key", "forget")
+    reference_key = kwargs.get("reference_key", "retain")
+    value_key = kwargs.get("value_key", None)
+
+    current_stats = _extract_distribution(
+        kwargs["pre_compute"][current_key], value_key=value_key
     )
-    reference_logs = kwargs.get("reference_logs", None)
-    if reference_logs:
-        reference_logs = reference_logs["retain_model_logs"]
-        retain_tr_stats = np.array(
-            [
-                evals["score"]
-                for evals in reference_logs["retain"]["value_by_index"].values()
-            ]
-        )
-        fq = ks_2samp(forget_tr_stats, retain_tr_stats)
-        pvalue = fq.pvalue
-    else:
+    reference_group = _get_reference_group(
+        kwargs.get("reference_logs", None), preferred_key="retain_model_logs"
+    )
+    if not reference_group:
         logger.warning(
-            "retain_model_logs not provided in reference_logs, setting forget_quality to None"
+            "reference_logs not provided for ks_test (expected 'retain_model_logs' "
+            "containing '%s'), setting result to None",
+            reference_key,
         )
         pvalue = None
+    elif reference_key not in reference_group or reference_group[reference_key] is None:
+        logger.warning(
+            "reference_logs present but missing key '%s' in retain_model_logs, "
+            "setting ks_test result to None",
+            reference_key,
+        )
+        pvalue = None
+    else:
+        reference_stats = _extract_distribution(
+            reference_group[reference_key], value_key=value_key
+        )
+        if len(current_stats) == 0 or len(reference_stats) == 0:
+            logger.warning(
+                "One or both distributions are empty for ks_test, setting result to None"
+            )
+            pvalue = None
+        else:
+            pvalue = ks_2samp(current_stats, reference_stats).pvalue
     return {"agg_value": pvalue}
 
 
@@ -64,3 +136,79 @@ def rel_diff(model, **kwargs):
         )
         ref = kwargs["ref_value"]
     return {"agg_value": (score - ref) / (ref + 1e-10) * 100}
+
+
+def _validate_scalar_metrics(raw_values):
+    """Return list of names whose values are None, non-scalar, or NaN."""
+    invalid = []
+    for name, v in raw_values.items():
+        if v is None:
+            invalid.append(name)
+            continue
+        if not np.isscalar(v):
+            invalid.append(name)
+            continue
+        try:
+            if np.isnan(v):
+                invalid.append(name)
+        except (TypeError, ValueError):
+            invalid.append(name)
+    return invalid
+
+
+@unlearning_metric(name="selectivity")
+def selectivity(model, **kwargs):
+    """Measure how much more the forget probability drops than the retain probability."""
+    forget_key = kwargs.get("forget_key", "forget")
+    retain_key = kwargs.get("retain_key", "retain")
+    eps = kwargs.get("eps", 1e-10)
+
+    reference_group = _get_reference_group(
+        kwargs.get("reference_logs", None), preferred_key="baseline_model_logs"
+    )
+    if reference_group is None:
+        logger.warning(
+            "baseline_model_logs not provided in reference_logs, setting selectivity to None"
+        )
+        return {"agg_value": None}
+
+    try:
+        current_forget = kwargs["pre_compute"][forget_key]["agg_value"]
+        current_retain = kwargs["pre_compute"][retain_key]["agg_value"]
+        reference_forget = reference_group[forget_key]["agg_value"]
+        reference_retain = reference_group[retain_key]["agg_value"]
+    except KeyError as exc:
+        logger.warning(
+            "Required metric '%s' missing in pre_compute or reference_logs, "
+            "setting selectivity to None",
+            exc,
+        )
+        return {"agg_value": None}
+
+    raw_values = {
+        "current_forget": current_forget,
+        "current_retain": current_retain,
+        "reference_forget": reference_forget,
+        "reference_retain": reference_retain,
+    }
+    invalid = _validate_scalar_metrics(raw_values)
+    if invalid:
+        logger.warning(
+            "Required metrics contain None, NaN, or non-scalar (%s), setting selectivity to None",
+            ", ".join(invalid),
+        )
+        return {"agg_value": None}
+
+    current_forget = float(current_forget)
+    current_retain = float(current_retain)
+    reference_forget = float(reference_forget)
+    reference_retain = float(reference_retain)
+
+    forget_drop = (reference_forget - current_forget) / (abs(reference_forget) + eps)
+    retain_drop = (reference_retain - current_retain) / (abs(reference_retain) + eps)
+
+    if abs(retain_drop) <= eps:
+        logger.warning("retain drop is too small to compute selectivity reliably")
+        return {"agg_value": None}
+
+    return {"agg_value": forget_drop / retain_drop}

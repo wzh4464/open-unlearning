@@ -70,6 +70,7 @@ echo "[$(date '+%H:%M:%S')] Evaluation"
 echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
 
 RETRAIN_EVAL_JSON="${RETRAIN_DIR}/evals/TOFU_EVAL.json"
+ORIGINAL_EVAL_JSON="${FINETUNE_DIR}/evals/TOFU_EVAL.json"
 
 # Eval retrain first if not done
 if [ ! -f "${RETRAIN_EVAL_JSON}" ]; then
@@ -86,6 +87,7 @@ fi
 eval_model() {
     local model_path=$1
     local task_name=$2
+    local original_logs=${3:-}
     local eval_dir="${model_path}/evals"
 
     if [ ! -d "${model_path}" ]; then
@@ -94,6 +96,10 @@ eval_model() {
     fi
 
     echo "Eval: ${task_name}"
+    local original_override=()
+    if [ -n "${original_logs}" ]; then
+        original_override=("eval.tofu.original_logs_path=${original_logs}")
+    fi
     $PYTHON_CMD src/eval.py --config-name=eval.yaml \
         experiment=eval/tofu/default model="${MODEL_NAME}" \
         forget_split="${FORGET_SPLIT}" holdout_split="${HOLDOUT_SPLIT}" \
@@ -101,21 +107,26 @@ eval_model() {
         model.model_args.pretrained_model_name_or_path="${model_path}" \
         model.tokenizer_args.pretrained_model_name_or_path="${BASE_MODEL_PATH}" \
         paths.output_dir="${eval_dir}" \
-        retain_logs_path="${RETRAIN_EVAL_JSON}"
+        retain_logs_path="${RETRAIN_EVAL_JSON}" \
+        "${original_override[@]}"
 }
 
 # Eval original
 eval_model "${FINETUNE_DIR}" "expA_original"
+if [ ! -f "${ORIGINAL_EVAL_JSON}" ]; then
+    echo "WARNING: Original eval output not found at ${ORIGINAL_EVAL_JSON}"
+    ORIGINAL_EVAL_JSON=""
+fi
 
 # Eval LMCleaner variants
 for K_VAL in 10 20 30 40 50; do
-    eval_model "saves/unlearn/expA_lmcleaner_k${K_VAL}_s${SEED}" "expA_lmcleaner_k${K_VAL}"
+    eval_model "saves/unlearn/expA_lmcleaner_k${K_VAL}_s${SEED}" "expA_lmcleaner_k${K_VAL}" "${ORIGINAL_EVAL_JSON}"
 done
 
 # Eval baselines
 for METHOD in "${BASELINE_METHODS[@]}"; do
     METHOD_LOWER="${METHOD,,}"
-    eval_model "$(get_unlearn_output_dir "${METHOD_LOWER}")" "$(get_unlearn_task_name "${METHOD_LOWER}")"
+    eval_model "$(get_unlearn_output_dir "${METHOD_LOWER}")" "$(get_unlearn_task_name "${METHOD_LOWER}")" "${ORIGINAL_EVAL_JSON}"
 done
 
 # =============================================
@@ -202,7 +213,10 @@ with open(csv_path, "w", newline="") as f:
 print(f"Saved: {csv_path}")
 
 # Print table
-key_metrics = ["model_utility", "forget_quality", "forget_truth_ratio", "time_seconds"]
+key_metrics = [
+    "model_utility", "forget_quality", "forget_prob_ks", "selectivity",
+    "forget_Q_A_Prob", "retain_Q_A_Prob", "forget_truth_ratio", "time_seconds"
+]
 available = [k for k in key_metrics if any(k in r for r in rows)]
 if available:
     header = f"{'Method':<20}" + "".join(f"{k:>18}" for k in available)
