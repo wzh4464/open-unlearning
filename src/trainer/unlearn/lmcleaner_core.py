@@ -1555,11 +1555,13 @@ def compute_correction(
             )
             d = v.numel()
             k = min(projector_rank, d)
-            # Cache projector: (d, k, seed) is fixed across all forget steps
+            # Cache projector: (d, k, seed) is fixed across all forget steps in one run.
+            # Cache limited to 1 entry to avoid unbounded memory growth.
             _cache_key = (d, k, projector_seed)
             if not hasattr(compute_correction, "_projector_cache"):
                 compute_correction._projector_cache = {}
             if _cache_key not in compute_correction._projector_cache:
+                compute_correction._projector_cache.clear()  # evict old entry
                 compute_correction._projector_cache[_cache_key] = build_public_projector(
                     d, k, seed=projector_seed, device="cpu"
                 )

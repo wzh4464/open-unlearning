@@ -260,7 +260,7 @@ class LMCleanerSampleLevel(UnlearnTrainer):
             # 使用 v_norm 作为 delta_det 的保守估计
             delta_det = v_norm_before_noise
             noise_sigma = compute_noise_sigma(delta_det, self.epsilon, self.delta)
-            v = inject_privacy_noise(v, noise_sigma)
+            v, _ = inject_privacy_noise(v, noise_sigma)
             noise_injected = True
             logger.debug(
                 f"  Phase 4: Injected privacy noise σ={noise_sigma:.6f} "
