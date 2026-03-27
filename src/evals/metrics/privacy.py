@@ -18,32 +18,38 @@ def _get_reference_group(reference_logs, preferred_key):
 
 
 def _extract_distribution(metric_result, value_key=None):
+    value_by_index = metric_result["value_by_index"]
+
+    def _get_value(evals):
+        if evals is None:
+            return None, False
+        if value_key is not None:
+            if value_key in evals:
+                return evals[value_key], False
+            return None, True
+        if "score" in evals:
+            return evals["score"], False
+        numeric_items = [
+            v
+            for v in evals.values()
+            if isinstance(v, (int, float, np.integer, np.floating))
+        ]
+        if len(numeric_items) != 1:
+            raise KeyError(
+                "Could not infer which scalar field to compare. "
+                "Pass value_key explicitly."
+            )
+        return numeric_items[0], False
+
     values = []
     skipped = 0
-    value_by_index = metric_result["value_by_index"]
     for evals in value_by_index.values():
-        if evals is None:
-            continue
-        if value_key is not None:
-            value = evals.get(value_key)
-            if value is None and value_key not in evals:
-                skipped += 1
-        elif "score" in evals:
-            value = evals["score"]
-        else:
-            numeric_items = [
-                value
-                for value in evals.values()
-                if isinstance(value, (int, float, np.integer, np.floating))
-            ]
-            if len(numeric_items) != 1:
-                raise KeyError(
-                    "Could not infer which scalar field to compare. "
-                    "Pass value_key explicitly."
-                )
-            value = numeric_items[0]
+        value, was_skipped = _get_value(evals)
+        if was_skipped:
+            skipped += 1
         if value is not None:
             values.append(value)
+
     if skipped > 0:
         logger.warning(
             "%d entries missing key '%s' were skipped in _extract_distribution",
@@ -132,6 +138,24 @@ def rel_diff(model, **kwargs):
     return {"agg_value": (score - ref) / (ref + 1e-10) * 100}
 
 
+def _validate_scalar_metrics(raw_values):
+    """Return list of names whose values are None, non-scalar, or NaN."""
+    invalid = []
+    for name, v in raw_values.items():
+        if v is None:
+            invalid.append(name)
+            continue
+        if not np.isscalar(v):
+            invalid.append(name)
+            continue
+        try:
+            if np.isnan(v):
+                invalid.append(name)
+        except (TypeError, ValueError):
+            invalid.append(name)
+    return invalid
+
+
 @unlearning_metric(name="selectivity")
 def selectivity(model, **kwargs):
     """Measure how much more the forget probability drops than the retain probability."""
@@ -167,18 +191,7 @@ def selectivity(model, **kwargs):
         "reference_forget": reference_forget,
         "reference_retain": reference_retain,
     }
-    invalid = []
-    for name, v in raw_values.items():
-        if v is None:
-            invalid.append(name)
-        elif not np.isscalar(v):
-            invalid.append(name)
-        else:
-            try:
-                if np.isnan(v):
-                    invalid.append(name)
-            except (TypeError, ValueError):
-                invalid.append(name)
+    invalid = _validate_scalar_metrics(raw_values)
     if invalid:
         logger.warning(
             "Required metrics contain None, NaN, or non-scalar (%s), setting selectivity to None",
