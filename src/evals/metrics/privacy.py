@@ -59,16 +59,31 @@ def ks_test(model, **kwargs):
     reference_group = _get_reference_group(
         kwargs.get("reference_logs", None), preferred_key="retain_model_logs"
     )
-    if reference_group:
+    if not reference_group:
+        logger.warning(
+            "reference_logs not provided for ks_test (expected 'retain_model_logs' "
+            "containing '%s'), setting result to None",
+            reference_key,
+        )
+        pvalue = None
+    elif reference_key not in reference_group or reference_group[reference_key] is None:
+        logger.warning(
+            "reference_logs present but missing key '%s' in retain_model_logs, "
+            "setting ks_test result to None",
+            reference_key,
+        )
+        pvalue = None
+    else:
         reference_stats = _extract_distribution(
             reference_group[reference_key], value_key=value_key
         )
-        pvalue = ks_2samp(current_stats, reference_stats).pvalue
-    else:
-        logger.warning(
-            "reference_logs not provided for ks_test, setting result to None"
-        )
-        pvalue = None
+        if len(current_stats) == 0 or len(reference_stats) == 0:
+            logger.warning(
+                "One or both distributions are empty for ks_test, setting result to None"
+            )
+            pvalue = None
+        else:
+            pvalue = ks_2samp(current_stats, reference_stats).pvalue
     return {"agg_value": pvalue}
 
 
@@ -122,10 +137,32 @@ def selectivity(model, **kwargs):
         )
         return {"agg_value": None}
 
-    current_forget = kwargs["pre_compute"][forget_key]["agg_value"]
-    current_retain = kwargs["pre_compute"][retain_key]["agg_value"]
-    reference_forget = reference_group[forget_key]["agg_value"]
-    reference_retain = reference_group[retain_key]["agg_value"]
+    try:
+        current_forget = kwargs["pre_compute"][forget_key]["agg_value"]
+        current_retain = kwargs["pre_compute"][retain_key]["agg_value"]
+        reference_forget = reference_group[forget_key]["agg_value"]
+        reference_retain = reference_group[retain_key]["agg_value"]
+    except KeyError as exc:
+        logger.warning(
+            "Required metric '%s' missing in pre_compute or reference_logs, "
+            "setting selectivity to None",
+            exc,
+        )
+        return {"agg_value": None}
+
+    values = {
+        "current_forget": current_forget,
+        "current_retain": current_retain,
+        "reference_forget": reference_forget,
+        "reference_retain": reference_retain,
+    }
+    invalid = [k for k, v in values.items() if v is None or (isinstance(v, float) and np.isnan(v))]
+    if invalid:
+        logger.warning(
+            "Required metrics contain None or NaN (%s), setting selectivity to None",
+            ", ".join(invalid),
+        )
+        return {"agg_value": None}
 
     forget_drop = (reference_forget - current_forget) / (abs(reference_forget) + eps)
     retain_drop = (reference_retain - current_retain) / (abs(reference_retain) + eps)
