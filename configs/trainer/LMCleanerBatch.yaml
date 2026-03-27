@@ -43,6 +43,10 @@ method_args:
   # False: 在train()调用时应用遗忘
   apply_immediately: false
 
+  # Phase 4: Privacy noise parameters
+  epsilon: 0.0     # ε > 0 enables noise injection; 0 = no noise (Removal-Only)
+  delta: 1e-5      # δ for (ε,δ)-certified unlearning
+
   # ! 历史参数重建: 在 θ[s] 处计算 HVP (论文 Algorithm 1)
   # ! 额外占用 ~1x 模型参数量 GPU 显存 + 读取 u[t] 的 IO 开销
   # ! 显存紧张时设为 false 退化为在 θ[τ] 处近似计算
