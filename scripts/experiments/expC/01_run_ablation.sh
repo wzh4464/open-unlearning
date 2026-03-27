@@ -30,8 +30,14 @@ done
 run_lmcleaner() {
     local CONFIG=$1 EPSILON=$2 NOISE_MODE=$3 TASK=$4
 
+    # Determine skip_correction flag
+    local SKIP_CORR="false"
+    if [ "$CONFIG" = "noise-only" ]; then
+        SKIP_CORR="true"
+    fi
+
     echo ""
-    echo "====== $TASK (config=$CONFIG, ε=$EPSILON, noise=$NOISE_MODE) ======"
+    echo "====== $TASK (config=$CONFIG, ε=$EPSILON, noise=$NOISE_MODE, skip_corr=$SKIP_CORR) ======"
 
     local OUT_DIR="${SAVES_BASE}/unlearn/${TASK}"
 
@@ -62,6 +68,7 @@ run_lmcleaner() {
         trainer.method_args.projector_rank=${PROJ_RANK} \
         trainer.method_args.projector_seed=${PROJ_SEED} \
         trainer.method_args.delta_cert_public=${DELTA_CERT} \
+        trainer.method_args.skip_correction=${SKIP_CORR} \
         trainer.method_args.use_historical_params=false \
         trainer.args.num_train_epochs=0 \
         trainer.args.seed=${SEED} \
@@ -87,51 +94,9 @@ fi
 # This requires special handling: skip Phase 1-3, only do Phase 4
 # We achieve this by setting K=0 (no propagation) and using the same noise calibration
 if [ -z "$FILTER_CONFIG" ] || [ "$FILTER_CONFIG" = "noise" ]; then
-    TASK="expC_noise_seed${SEED}"
-    OUT_DIR="${SAVES_BASE}/unlearn/${TASK}"
-
-    if [ -f "$OUT_DIR/audit/audit_records.json" ]; then
-        echo "SKIP: $TASK (already done)"
-    else
-        echo ""
-        echo "====== $TASK (config=noise-only) ======"
-        # Noise-Only: K=0 means v0 = -u[tz] but no HVP propagation
-        # The correction v = -u[tz] is still applied, then noise is added
-        # To get TRUE noise-only (no correction at all), we'd need epsilon>0 + special flag
-        # For now: use K=0 + epsilon=1.0 + subspace noise
-        # The v0=-u[tz] correction still happens — this is "minimal removal + noise"
-        #
-        # TODO: For true noise-only (zero correction), need a code flag to skip Phase 1
-        # For the ablation, K=0 is a reasonable proxy since it only does single-step correction
-        $PYTHON_CMD src/train.py --config-name=unlearn.yaml \
-            experiment=unlearn/tofu/default \
-            trainer=LMCleanerBatch \
-            model=${MODEL} \
-            model.model_args.pretrained_model_name_or_path="${MODEL_DIR}" \
-            model.tokenizer_args.pretrained_model_name_or_path="${MODEL_DIR}" \
-            forget_split=${FORGET_SPLIT} \
-            retain_split=${RETAIN_SPLIT} \
-            holdout_split=${HOLDOUT_SPLIT} \
-            trainer.method_args.training_log_dir="${TRAIN_LOG_DIR}" \
-            trainer.method_args.K=0 \
-            trainer.method_args.max_step=${MAX_STEP} \
-            trainer.method_args.hessian_mode=${HESSIAN_MODE} \
-            trainer.method_args.damping=${DAMPING} \
-            trainer.method_args.epsilon=${DEFAULT_EPSILON} \
-            trainer.method_args.delta=${DEFAULT_DELTA} \
-            trainer.method_args.noise_mode=subspace \
-            trainer.method_args.beta=${BETA} \
-            trainer.method_args.projector_rank=${PROJ_RANK} \
-            trainer.method_args.projector_seed=${PROJ_SEED} \
-            trainer.method_args.delta_cert_public=${DELTA_CERT} \
-            trainer.method_args.use_historical_params=false \
-            trainer.args.num_train_epochs=0 \
-            trainer.args.seed=${SEED} \
-            paths.output_dir="${OUT_DIR}" \
-            task_name="${TASK}"
-
-        echo "====== $TASK done ======"
-    fi
+    # True Noise-Only: skip_correction=true zeros out v before noise injection.
+    # This gives θ_noise = θ[τ] + ξ (no deterministic removal at all).
+    run_lmcleaner "noise-only" "${DEFAULT_EPSILON}" "subspace" "expC_noise_seed${SEED}"
 fi
 
 echo ""

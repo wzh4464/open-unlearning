@@ -837,10 +837,23 @@ def build_public_projector(
     Returns:
         Q: Orthonormal basis matrix of shape (d, k)
     """
+    if k <= 0:
+        raise ValueError(f"projector_rank k must be > 0, got {k}")
+    if k > d:
+        logger.warning(f"projector_rank k={k} > d={d}, clamping to d")
+        k = d
+
     gen = torch.Generator(device="cpu")
     gen.manual_seed(seed)
-    # Generate random matrix and orthogonalize via QR
-    # For memory efficiency with large d, use chunked random generation
+
+    # For very large d (>100M params), chunked QR would be needed.
+    # Llama-3.2-1B has d≈1.24B — this allocates ~4.6GB for k=1000.
+    # For typical k=100: ~0.46GB, acceptable.
+    if d * k > 2e9:
+        logger.warning(
+            f"build_public_projector: d*k={d*k:.0f} is large, "
+            f"may use {d*k*4/1e9:.1f}GB RAM. Consider reducing k."
+        )
     A = torch.randn(d, k, generator=gen, dtype=torch.float32)
     Q, _ = torch.linalg.qr(A)
     return Q.to(device)
@@ -850,14 +863,15 @@ def inject_privacy_noise(
     v: torch.Tensor,
     sigma: float,
     generator: Optional[torch.Generator] = None,
-) -> torch.Tensor:
+) -> Tuple[torch.Tensor, float]:
     """
     Isotropic noise injection: v + N(0, σ²I). Kept for backward compatibility.
+    Returns (v + noise, ||noise||₂) for consistent audit tracking.
     """
     if sigma <= 0:
-        return v
+        return v, 0.0
     noise = torch.randn(v.shape, dtype=v.dtype, device=v.device, generator=generator) * sigma
-    return v + noise
+    return v + noise, float(noise.norm().item())
 
 
 def inject_subspace_noise(
@@ -893,7 +907,12 @@ def inject_subspace_noise(
     if sigma_parallel <= 0 and sigma_perp <= 0:
         return v, 0.0
 
-    z = torch.randn(v.shape, dtype=v.dtype, device=v.device, generator=generator)
+    # Flatten to 1D for matmul with Q (d×k), restore shape afterwards
+    orig_shape = v.shape
+    v_flat = v.view(-1)
+    d = v_flat.numel()
+
+    z = torch.randn(d, dtype=v.dtype, device=v.device, generator=generator)
 
     # Project z onto subspace: z_∥ = Q @ (Q^T @ z)
     Q = projector_Q.to(v.device, v.dtype)
@@ -904,7 +923,7 @@ def inject_subspace_noise(
     noise = sigma_parallel * z_parallel + sigma_perp * z_perp
     noise_norm = float(noise.norm().item())
 
-    return v + noise, noise_norm
+    return (v_flat + noise).view(orig_shape), noise_norm
 
 
 class HistoricalParamProvider:
@@ -1197,6 +1216,7 @@ def compute_correction(
     beta: float = 0.1,  # concentration factor β ∈ (0,1]
     projector_rank: int = 100,  # k for Π_k
     projector_seed: int = 42,  # seed for public random projector
+    skip_correction: bool = False,  # True = noise-only mode (skip Phase 1-3)
     # On-demand loading support for large K values
     lazy_loader: Optional[LazyLoaderProtocol] = None,
     initial_record: Optional[StepRecord] = None,
@@ -1287,6 +1307,11 @@ def compute_correction(
     if use_lazy_loading and initial_record is not None:
         del rec
         gc.collect()
+
+    # Noise-Only mode: zero out correction, skip Phase 2-3 entirely
+    if skip_correction:
+        v = torch.zeros_like(v)
+        logger.info(f"skip_correction=True: zeroed v for noise-only mode (tz={tz})")
 
     # Phase 2: 前向传播窗口
     start = tz + 1
@@ -1541,8 +1566,7 @@ def compute_correction(
         else:
             # Isotropic fallback (β=1, Π_k=I)
             _noise_sigma = compute_noise_sigma(delta_det, epsilon, delta)
-            v = inject_privacy_noise(v, _noise_sigma)
-            _noise_norm = 0.0  # not tracked for isotropic
+            v, _noise_norm = inject_privacy_noise(v, _noise_sigma)
             _noise_injected = True
             _actual_noise_mode = "isotropic"
             _sigma_par = _noise_sigma

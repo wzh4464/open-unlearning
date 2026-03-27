@@ -97,6 +97,8 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         # Set to eta_max * grad_clip_C (for SGD) or max ||u[t]|| from training logs.
         # 0 = fallback to per-step v_norm estimate (NOT paper-faithful).
         delta_cert_public: float = 0.0,
+        # Noise-Only mode: skip deterministic correction, only inject noise
+        skip_correction: bool = False,
         # ! 历史参数重建: 在 θ[s] 处计算 HVP (论文 Algorithm 1)
         # ! 额外占用 ~1x 模型参数量 GPU 显存 + 读取 u[t] 的 IO 开销
         # ! 显存紧张时设为 False 退化为在 θ[τ] 处近似计算
@@ -129,6 +131,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         self.projector_rank = projector_rank
         self.projector_seed = projector_seed
         self.delta_cert_public = delta_cert_public
+        self.skip_correction = skip_correction
 
         # 历史参数重建开关
         self.use_historical_params = use_historical_params
@@ -421,6 +424,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                     beta=self.beta,
                     projector_rank=self.projector_rank,
                     projector_seed=self.projector_seed,
+                    skip_correction=self.skip_correction,
                     lazy_loader=self.lazy_loader,
                     initial_record=initial_record,
                     use_historical_params=self.use_historical_params,
