@@ -63,7 +63,7 @@ class LazyUProvider:
         eta_cache: Dict[int, float],
         collator=None,
         device: str = "cuda",
-        micro_batch_size: int = 8,
+        micro_batch_size: int = 4,
     ):
         self.lazy_loader = lazy_loader
         self.model = model
@@ -129,26 +129,29 @@ class LazyUProvider:
                 for k, v in batch.items()
             }
 
-            # Forward + backward (accumulate over micro-batches if needed)
+            # Forward + backward (accumulate over micro-batches)
+            # Enable gradient checkpointing to reduce GPU memory
+            _gc_was_enabled = getattr(self.model, "is_gradient_checkpointing", False)
+            if hasattr(self.model, "gradient_checkpointing_enable") and not _gc_was_enabled:
+                self.model.gradient_checkpointing_enable()
+
             self.model.zero_grad()
 
-            # For large batches, split into micro-batches
             total_samples = len(indices)
-            if total_samples <= self.micro_batch_size:
-                outputs = self.model(**batch)
-                loss = outputs.loss
-                loss.backward()
-            else:
-                # Micro-batch accumulation: slice all tensor fields generically
-                n_micro_batches = (total_samples + self.micro_batch_size - 1) // self.micro_batch_size
-                for start in range(0, total_samples, self.micro_batch_size):
-                    end = min(start + self.micro_batch_size, total_samples)
-                    micro = {
-                        k: v[start:end] if isinstance(v, torch.Tensor) and v.shape[0] == total_samples else v
-                        for k, v in batch.items()
-                    }
-                    outputs = self.model(**micro)
-                    (outputs.loss / n_micro_batches).backward()
+            n_micro_batches = (total_samples + self.micro_batch_size - 1) // self.micro_batch_size
+            for start in range(0, total_samples, self.micro_batch_size):
+                end = min(start + self.micro_batch_size, total_samples)
+                micro = {
+                    k: v[start:end] if isinstance(v, torch.Tensor) and v.shape[0] == total_samples else v
+                    for k, v in batch.items()
+                }
+                outputs = self.model(**micro)
+                (outputs.loss / n_micro_batches).backward()
+                del outputs, micro
+                torch.cuda.empty_cache()
+
+            if hasattr(self.model, "gradient_checkpointing_disable") and not _gc_was_enabled:
+                self.model.gradient_checkpointing_disable()
 
             # Collect gradient → u = -η * grad
             grads = []

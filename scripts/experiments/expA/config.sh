@@ -43,7 +43,7 @@ FORGET_INDICES_FILE="configs/forget_indices/forget01.json"
 # LMCleaner Parameters
 # ============================================
 K=50
-HESSIAN_MODE="GGN"
+HESSIAN_MODE="fisher"
 DAMPING="0.0001"
 
 # ============================================

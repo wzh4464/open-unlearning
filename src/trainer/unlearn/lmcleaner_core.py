@@ -299,7 +299,7 @@ def hvp_fisher(
     g = _flatten([grad.detach() for grad in grads])
 
     # 计算 g^T v (标量)
-    g_dot_v = torch.dot(g, v)
+    g_dot_v = (g * v).sum()  # torch.dot fails for vectors > 2.1B elements (int32 limit)
 
     # 返回 g * (g^T v) = Hv (Fisher 近似)
     return g * g_dot_v
