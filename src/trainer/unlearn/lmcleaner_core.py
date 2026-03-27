@@ -1534,6 +1534,11 @@ def compute_correction(
     _noise_norm = 0.0
     _noise_injected = False
     _actual_noise_mode = "none"
+    _actual_proj_rank = 0
+
+    _valid_noise_modes = {"subspace", "isotropic", "none"}
+    if noise_mode not in _valid_noise_modes:
+        raise ValueError(f"Unknown noise_mode: {noise_mode!r}. Must be one of {_valid_noise_modes}")
 
     if epsilon > 0 and noise_mode != "none":
         # Determine sensitivity bound Δ̄_cert(K) — MUST be public, data-independent
@@ -1555,6 +1560,7 @@ def compute_correction(
             )
             d = v.numel()
             k = min(projector_rank, d)
+            _actual_proj_rank = k
             # Cache projector: (d, k, seed) is fixed across all forget steps in one run.
             # Cache limited to 1 entry to avoid unbounded memory growth.
             _cache_key = (d, k, projector_seed)
@@ -1606,7 +1612,7 @@ def compute_correction(
         sigma_parallel=_sigma_par,
         sigma_perp=_sigma_perp,
         beta=beta,
-        projector_rank=projector_rank if _actual_noise_mode == "subspace" else 0,
+        projector_rank=_actual_proj_rank,
         delta_cert=delta_det if delta_det is not None else 0.0,
         correction_norm=v_norm_before_noise,
         noise_norm=_noise_norm,
