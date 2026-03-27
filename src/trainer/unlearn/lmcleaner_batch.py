@@ -93,6 +93,10 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         beta: float = 0.1,  # concentration factor β ∈ (0,1]
         projector_rank: int = 100,  # k for Π_k
         projector_seed: int = 42,  # seed for public random projector
+        # Public sensitivity bound Δ̄_cert(K) — MUST be data-independent.
+        # Set to eta_max * grad_clip_C (for SGD) or max ||u[t]|| from training logs.
+        # 0 = fallback to per-step v_norm estimate (NOT paper-faithful).
+        delta_cert_public: float = 0.0,
         # ! 历史参数重建: 在 θ[s] 处计算 HVP (论文 Algorithm 1)
         # ! 额外占用 ~1x 模型参数量 GPU 显存 + 读取 u[t] 的 IO 开销
         # ! 显存紧张时设为 False 退化为在 θ[τ] 处近似计算
@@ -124,6 +128,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
         self.beta = beta
         self.projector_rank = projector_rank
         self.projector_seed = projector_seed
+        self.delta_cert_public = delta_cert_public
 
         # 历史参数重建开关
         self.use_historical_params = use_historical_params
@@ -411,6 +416,7 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                     batch_reconstructor=self.batch_reconstructor,
                     epsilon=self.epsilon,
                     delta=self.delta,
+                    delta_det=self.delta_cert_public if self.delta_cert_public > 0 else None,
                     noise_mode=self.noise_mode,
                     beta=self.beta,
                     projector_rank=self.projector_rank,

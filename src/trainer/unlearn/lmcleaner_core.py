@@ -1508,11 +1508,15 @@ def compute_correction(
     _actual_noise_mode = "none"
 
     if epsilon > 0 and noise_mode != "none":
-        # Determine sensitivity bound Δ̄_cert(K)
-        if delta_det is None:
+        # Determine sensitivity bound Δ̄_cert(K) — MUST be public, data-independent
+        if delta_det is None or delta_det <= 0:
+            # Paper requires a public bound. Using v_norm is NOT paper-faithful
+            # because it depends on the private forget request.
+            # Fallback: use v_norm with a loud warning.
             logger.warning(
-                "delta_det not provided, using v_norm as estimate. "
-                "For guaranteed (ε,δ)-certified unlearning, provide a proven Δ̄_cert(K) bound."
+                "delta_cert (public sensitivity bound) not provided! "
+                "Falling back to v_norm as estimate. This is NOT paper-faithful — "
+                "set delta_det = eta_max * grad_clip_C or max ||u[t]|| from training logs."
             )
             delta_det = v_norm_before_noise
 

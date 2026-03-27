@@ -58,6 +58,12 @@ method_args:
   projector_rank: 100  # rank k of public projector Π_k
   projector_seed: 42   # deterministic public randomness seed
 
+  # Public sensitivity bound Δ̄_cert(K) — MUST be set for paper-faithful noise
+  # For SGD: eta_max * grad_clip_C
+  # For AdamW: max ||u[t]|| from training logs (empirical public bound)
+  # 0 = fallback to per-step v_norm (NOT paper-faithful, warns loudly)
+  delta_cert_public: 0
+
   # HVP micro-batch size for large training batches
   # 0 = use full batch (default); >0 = split batch into chunks to avoid OOM
   # Recommended: 32 or 64 when training batch size >= 128
