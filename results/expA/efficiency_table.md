@@ -4,10 +4,6 @@ Hardware: 1x H200 140GB | Model: Llama-3.2-3B | Data: TOFU forget10 (400 samples
 
 |                                 | Retrain | GradDiff | NPO    | PDU    | UNDIAL | LMC K=10 | LMC K=50 |
 |---------------------------------|---------|----------|--------|--------|--------|----------|----------|
-| **Training-time overhead**      |         |          |        |        |        |          |          |
-| Pre-comp time                   | —       | 1.6min   | 1.6min | 1.6min | 1.6min | 48.5min  | 48.5min  |
-| Pre-comp overhead (%)           | —       | 0%       | 0%     | 0%     | 0%     | +2953%   | +2953%   |
-| On-disk storage (GB)            | 0       | <1       | <1     | <1     | <1     | 42       | 42       |
 | **Deletion (per request)**      |         |          |        |        |        |          |          |
 | Latency (s)                     | 86.2    | 16.4     | 40.2   | 16.4   | 18.8   | 15.1     | 52.8     |
 | Peak GPU (GB)                   | 30.0    | 32.9     | 39.1   | 32.4   | 39.6   | 25.8     | 25.8     |
