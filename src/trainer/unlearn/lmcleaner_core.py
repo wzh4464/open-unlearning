@@ -292,17 +292,23 @@ def hvp_fisher(
         else:
             raise ValueError("No loss_fn, outputs.loss, or labels found")
 
-    # 计算梯度 g = ∇L
-    grads = torch.autograd.grad(loss, params)
+    # 计算梯度 g = ∇L (create_graph=False to avoid retaining graph)
+    grads = torch.autograd.grad(loss, params, create_graph=False)
 
-    # 展平梯度为向量
-    g = _flatten([grad.detach() for grad in grads])
+    # 展平梯度为向量, clone to break graph references
+    g = _flatten([grad.detach().clone() for grad in grads])
+
+    # Release computation graph immediately
+    del grads, loss, outputs
+    model.zero_grad(set_to_none=True)
 
     # 计算 g^T v (标量)
     g_dot_v = (g * v).sum()  # torch.dot fails for vectors > 2.1B elements (int32 limit)
 
     # 返回 g * (g^T v) = Hv (Fisher 近似)
-    return g * g_dot_v
+    result = g * g_dot_v
+    del g
+    return result
 
 
 def hvp_ggn(
@@ -715,9 +721,13 @@ def hvp_apply(
     batch_size = _get_batch_size(batch_data)
     if batch_size == 0:
         logger.warning("Could not infer batch size from batch_data, falling back to full-batch HVP")
-        return _hvp_single(batch_data)
+        result = _hvp_single(batch_data)
+        del batch_data; gc.collect()
+        return result
     if mbs <= 0 or batch_size <= mbs:
-        return _hvp_single(batch_data)
+        result = _hvp_single(batch_data)
+        del batch_data; gc.collect()
+        return result
 
     # Guard: micro-batch averaging is only correct under mean reduction.
     # HF Trainer and all built-in HVP modes (fisher, GGN) use mean loss.
@@ -747,6 +757,8 @@ def hvp_apply(
         total_samples += chunk_size
         del micro, chunk_hvp
 
+    del batch_data
+    gc.collect()
     return hvp_acc / total_samples
 
 
@@ -854,8 +866,15 @@ def build_public_projector(
             f"build_public_projector: d*k={d*k:.0f} is large, "
             f"may use {d*k*4/1e9:.1f}GB RAM. Consider reducing k."
         )
-    A = torch.randn(d, k, generator=gen, dtype=torch.float32)
-    Q, _ = torch.linalg.qr(A)
+    # For billion-dim vectors, torch.linalg.qr and float32 norm are
+    # numerically unstable. Instead, generate k independent random unit
+    # vectors (nearly orthogonal in high-d: E[|<u,v>|] ≈ 1/√d ≈ 3e-5).
+    # Use float64 for norm computation to avoid 22% error in float32.
+    Q = torch.empty(d, k, dtype=torch.float32)
+    for i in range(k):
+        v = torch.randn(d, generator=gen, dtype=torch.float32)
+        v_norm = v.double().norm().item()  # float64 for precision
+        Q[:, i] = v / v_norm
     return Q.to(device)
 
 
@@ -1508,6 +1527,7 @@ def compute_correction(
 
         eta = srec.eta
         v = v - eta * hvp
+        del hvp
 
         # 添加阻尼: v ← v - η[s] * λ * v (实现添加，论文未包含)
         if cfg.damping > 0:
@@ -1528,8 +1548,8 @@ def compute_correction(
 
         # 清理当前记录 (lazy loading 模式)
         if use_lazy_loading:
-            del srec, hvp
-            if hvp_calls % 50 == 0:
+            del srec
+            if hvp_calls % 5 == 0:
                 gc.collect()
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()

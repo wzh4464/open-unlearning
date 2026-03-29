@@ -94,6 +94,11 @@ class LazyUProvider:
         u = self._recompute(step_id)
         if u is not None:
             self._stats["recomputed"] += 1
+            # Limit cache to avoid OOM (each u[t] is ~model_size in bf16)
+            if len(self._cache) >= 5:
+                oldest = min(self._cache.keys())
+                del self._cache[oldest]
+                gc.collect()
             self._cache[step_id] = u.cpu()
             return u
 
@@ -130,7 +135,6 @@ class LazyUProvider:
             }
 
             # Forward + backward (accumulate over micro-batches)
-            # Enable gradient checkpointing to reduce GPU memory
             _gc_was_enabled = getattr(self.model, "is_gradient_checkpointing", False)
             if hasattr(self.model, "gradient_checkpointing_enable") and not _gc_was_enabled:
                 self.model.gradient_checkpointing_enable()
@@ -146,28 +150,29 @@ class LazyUProvider:
                     for k, v in batch.items()
                 }
                 outputs = self.model(**micro)
-                (outputs.loss / n_micro_batches).backward()
-                del outputs, micro
-                torch.cuda.empty_cache()
+                loss = outputs.loss / n_micro_batches
+                loss.backward()
+                # Immediately break all references to the computation graph
+                del loss, outputs, micro
 
             if hasattr(self.model, "gradient_checkpointing_disable") and not _gc_was_enabled:
                 self.model.gradient_checkpointing_disable()
 
-            # Collect gradient → u = -η * grad
-            grads = []
-            for p in self.model.parameters():
-                if p.requires_grad:
-                    if p.grad is not None:
-                        grads.append(p.grad.detach().flatten())
-                    else:
-                        grads.append(torch.zeros(p.numel(), device=self.device))
+            # Collect gradient → u = -η * grad (detach + clone to break graph refs)
+            with torch.no_grad():
+                grads = []
+                for p in self.model.parameters():
+                    if p.requires_grad:
+                        if p.grad is not None:
+                            grads.append(p.grad.detach().clone().flatten())
+                        else:
+                            grads.append(torch.zeros(p.numel(), device=self.device))
+                u = -eta * torch.cat(grads)
+                del grads
 
-            gbar = torch.cat(grads)
-            u = -eta * gbar
-
-            # Cleanup
-            self.model.zero_grad()
-            del batch, gbar, grads
+            # Cleanup: zero grad to release .grad tensors, then force GC
+            self.model.zero_grad(set_to_none=True)
+            del batch
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()

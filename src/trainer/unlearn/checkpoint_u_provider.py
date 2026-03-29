@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 
 
 def _get_flat_params(model: nn.Module) -> torch.Tensor:
-    """Flatten all model parameters into a single vector (float32 for precision)."""
-    return torch.cat([p.detach().float().view(-1) for p in model.parameters()])
+    """Flatten all model parameters into a single vector (bf16 to save memory)."""
+    return torch.cat([p.detach().to(torch.bfloat16).view(-1) for p in model.parameters()])
 
 
 def _set_flat_params(model: nn.Module, flat: torch.Tensor):
@@ -246,17 +246,17 @@ class CheckpointAwareUProvider:
             for name, param in self.model.named_parameters():
                 if param.requires_grad:
                     if name in data:
-                        flat_parts.append(data[name].reshape(-1).float())
+                        flat_parts.append(data[name].reshape(-1).to(torch.bfloat16))
                     else:
                         logger.warning(
                             f"Checkpoint at step {step_id} missing key '{name}', "
                             f"using current param"
                         )
-                        flat_parts.append(param.detach().cpu().float().reshape(-1))
+                        flat_parts.append(param.detach().cpu().to(torch.bfloat16).reshape(-1))
             flat = torch.cat(flat_parts)
             del flat_parts
         else:
-            flat = data.float()
+            flat = data.to(torch.bfloat16)
         _set_flat_params(self.model, flat)
         del data, flat
         logger.debug(f"Loaded checkpoint θ[{step_id}]")
@@ -302,26 +302,26 @@ class CheckpointAwareUProvider:
                     for k, v in batch.items()
                 }
                 outputs = self.model(**micro)
-                (outputs.loss / n_micro).backward()
-                del outputs, micro
-
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+                loss = outputs.loss / n_micro
+                loss.backward()
+                del loss, outputs, micro
 
             if hasattr(self.model, "gradient_checkpointing_disable") and not _gc_was_enabled:
                 self.model.gradient_checkpointing_disable()
 
-            # u = -eta * grad
-            grads = []
-            for p in self.model.parameters():
-                if p.requires_grad and p.grad is not None:
-                    grads.append((-eta * p.grad).detach().flatten())
-                elif p.requires_grad:
-                    grads.append(torch.zeros(p.numel(), device=self.device))
+            # u = -eta * grad (detach+clone to break graph refs)
+            with torch.no_grad():
+                grads = []
+                for p in self.model.parameters():
+                    if p.requires_grad and p.grad is not None:
+                        grads.append((-eta * p.grad).detach().clone().flatten())
+                    elif p.requires_grad:
+                        grads.append(torch.zeros(p.numel(), device=self.device))
+                u = torch.cat(grads)
+                del grads
 
-            u = torch.cat(grads)
-            self.model.zero_grad()
-            del batch, grads
+            self.model.zero_grad(set_to_none=True)
+            del batch
             gc.collect()
             torch.cuda.empty_cache()
 
