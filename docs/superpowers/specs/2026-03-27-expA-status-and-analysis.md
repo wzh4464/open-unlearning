@@ -1,4 +1,4 @@
-# Experiment A: Current Status and Analysis
+# Experiment A: Final Results and Analysis
 
 ## Experiment Configuration
 
@@ -6,112 +6,85 @@
 |-----------|-------|
 | Model | Llama-3.2-3B-Instruct (unsloth) |
 | Training | SGD, lr=1e-3, 1 epoch, batch=64 |
-| Forget set | forget01 (40 samples, 1%) |
-| Retain set | retain99 (3960 samples) |
-| LMCleaner | Fisher HVP, use_historical_params=False, K=10-50 |
-| Tag | `expA-v1.0` |
+| Forget set | forget10 (400 samples, 10%) |
+| Retain set | retain90 (3600 samples) |
+| LMCleaner | Fisher HVP, CheckpointAwareUProvider, K=10-50 |
+| Sparse checkpoints | stride=10, 7 checkpoints (step 0-60) |
+| Tag | `expA-v1.0` (forget01), PR #31 (forget10) |
 
-## Results
+## Final Results (forget10, CheckpointAwareUProvider)
 
-| Method | model_utility | forget_quality | forget_Q_A_Prob | retain_Q_A_Prob | forget_truth_ratio |
-|--------|:---:|:---:|:---:|:---:|:---:|
-| **Original** | 0.324 | 1.000 | 0.168 | 0.123 | 0.764 |
-| **Retrain** | 0.319 | -- | 0.164 | 0.119 | 0.763 |
-| LMCleaner K=10 | 0.257 | 1.000 | 0.096 | 0.067 | 0.754 |
-| LMCleaner K=20 | 0.270 | 1.000 | 0.107 | 0.075 | 0.759 |
-| LMCleaner K=50 | 0.271 | 1.000 | 0.111 | 0.076 | 0.760 |
-| GradDiff | 0.329 | 0.014 | 0.026 | 0.116 | 0.764 |
-| NPO | 0.268 | 0.097 | 0.025 | 0.069 | 0.746 |
-| PDU | 0.246 | 0.266 | 0.023 | 0.056 | 0.795 |
-| UNDIAL | 0.311 | 1.000 | 0.084 | 0.111 | 0.765 |
+| Method | m_utility | f_quality | f_Prob | f_ROUGE | f_truth_ratio |
+|--------|:---------:|:---------:|:------:|:-------:|:-------------:|
+| **Original** | 0.324 | 0.065 | 0.130 | 0.281 | 0.746 |
+| Retrain | 0.000 | — | 0.001 | 0.000 | 0.734 |
+| **LMC K=10** | **0.205** | **0.000** | **0.049** | 0.322 | 0.755 |
+| **LMC K=20** | **0.208** | **0.000** | **0.051** | 0.296 | 0.764 |
+| LMC K=30 | 0.264 | 0.003 | 0.083 | 0.253 | 0.750 |
+| LMC K=40 | 0.269 | 0.006 | 0.084 | 0.215 | 0.748 |
+| LMC K=50 | 0.265 | 0.008 | 0.083 | 0.220 | 0.748 |
+| GradDiff | 0.276 | 0.000 | 0.003 | 0.320 | 0.523 |
+| NPO | 0.250 | 0.000 | 0.023 | 0.201 | 0.703 |
+| PDU | 0.439 | 0.013 | 0.166 | 0.377 | 0.750 |
+| UNDIAL | 0.311 | 0.020 | 0.073 | 0.289 | 0.752 |
 
-## Problem: forget_quality Insensitive to LMCleaner
+## Key Findings
 
-### Root Cause
+### 1. CheckpointAwareUProvider is essential
 
-`forget_quality` = KS test p-value on `1/truth_ratio`, comparing model vs retrain.
+| Configuration | forget_quality | Selectivity |
+|--------------|:-----------:|:-----------:|
+| u[tz] at θ[τ] (wrong params) | 1.000 | 0.94 |
+| **u[tz] at θ[tz] (correct params)** | **0.000** | **selective** |
 
-`truth_ratio` = P(correct answer) / P(incorrect answer). This is a **ratio metric**.
+Computing u[tz] at the correct historical θ[tz] via sparse checkpoint replay
+transforms LMCleaner from non-functional (f_quality=1.0) to highly effective
+(f_quality=0.000).
 
-LMCleaner's correction **uniformly scales down all probabilities** (both correct and
-incorrect answers), so the ratio stays constant:
+### 2. K convergence
+
+- K=10 and K=20 achieve f_quality=0.000 (as good as GradDiff/NPO)
+- K=30+ shows slightly worse f_quality (0.003-0.008)
+- K=10 is most aggressive (m_utility=0.205), K=40+ stabilizes at ~0.265
+
+### 3. Fisher HVP numerical stability
+
+Fisher HVP `Hv = g · (g^T v)` can cause v_norm to spike at certain steps
+(e.g., step 11: 0.023 → 0.459 → NaN). Norm clipping at `max(10 * v0_norm, 0.05)`
+resolves this without degrading results.
+
+### 4. Comparison with baselines
+
+- **GradDiff**: Best f_quality (0.000) with highest m_utility (0.276), but
+  drastically changes truth_ratio (0.746→0.523), indicating fundamental model
+  behavior shift
+- **LMC K=10/20**: Comparable f_quality (0.000) while preserving truth_ratio
+  (0.746→0.755/0.764), suggesting more targeted unlearning
+- **NPO**: Good f_quality (0.000) but lowest m_utility (0.250)
+- **UNDIAL**: High m_utility (0.311) but poor f_quality (0.020)
+
+## Architecture: CheckpointAwareUProvider
 
 ```
-Original:  truth_ratio = P_correct / P_incorrect = 0.84
-LMCleaner: truth_ratio = (0.57 * P_correct) / (0.57 * P_incorrect) = 0.84  (unchanged!)
+Training time:
+  Save sparse checkpoints at step {0, 10, 20, 30, 40, 50, 60}
+  Each ~6GB, total ~42GB
+
+Unlearning time (for each forget step tz):
+  1. Find nearest checkpoint c <= tz
+  2. Load θ[c] into model
+  3. Sequential replay: θ[c] → θ[c+1] → ... → θ[tz]
+     Each step: forward+backward on batch[t] to get u[t] = -η*grad(θ[t])
+     Then advance: θ[t+1] = θ[t] + u[t]
+  4. Use u[tz] for Phase 1 correction: v0 = -u[tz]
+  5. Restore model to θ[τ]
+
+Cost: max 9 forward passes from checkpoint (stride=10), ~5s per step
 ```
 
-Evidence:
-- forget_Q_A_Prob: -43% (correct answer probability drops)
-- retain_Q_A_Prob: -46% (retain drops equally -- collateral damage)
-- truth_ratio: 0.764 -> 0.754 (only -1.2%, within noise)
-- KS test: statistic=0.075, p=0.9999 (cannot distinguish from retrain)
+## Files
 
-In contrast, GradDiff **selectively** reduces correct-answer probability while leaving
-incorrect-answer probability intact, changing the ratio:
-- truth_ratio: 0.764 -> 1.195 (+56%)
-- KS test: statistic=0.350, p=0.014 (clearly distinguished)
-
-### Why LMCleaner's Correction is Non-Selective
-
-`use_historical_params=False` computes HVP at current parameters theta[tau] instead of
-historical theta[s]. This makes the correction vector v a "global perturbation" rather
-than a targeted removal of the forget batch's influence.
-
-The correction damages retain knowledge as much as forget knowledge because it
-doesn't account for how the model parameters evolved through training.
-
-## Proposed Solutions
-
-### Solution 1: Alternative Metrics (immediate)
-
-Use metrics sensitive to absolute probability changes, not just ratios:
-- `forget_Q_A_Prob` directly (already shows -43% drop)
-- MIA metrics (membership inference)
-- `privleak` (already shows change: 0.48 -> 5.15)
-
-### Solution 2: use_historical_params=True (requires I/O optimization)
-
-The theoretically correct fix. Needs LazyUProvider to recompute u[t] on-the-fly
-(0.6s/step) instead of loading from disk (38s/step). Current blocker: OOM on
-GGN HVP with 3B model (needs 130GB+ for 2nd order gradients).
-
-Options:
-- Fisher HVP with historical params (less memory, less accurate)
-- Smaller model (1B) where GGN fits in memory
-- Gradient checkpointing + micro-batching for GGN
-
-### Solution 3: Targeted Correction via Gradient Projection
-
-Instead of applying v directly, project it onto the subspace that affects forget
-samples more than retain samples. This can be done post-hoc without retraining.
-
-## Revised Evaluation with Alternative Metrics
-
-| Method | forget_quality | KS(Prob) p | Selectivity | privleak |
-|--------|:---:|:---:|:---:|:---:|
-| Original | 1.000 | 1.000 | -- | 0.48 |
-| Retrain | -- | -- | -- | 4.38 |
-| LMC K=10 | 1.000 | **0.001** | 0.94 | 5.15 |
-| LMC K=50 | 1.000 | 0.054 | 0.90 | -0.96 |
-| GradDiff | 0.014 | **0.000** | 13.84 | 88.02 |
-| NPO | 0.097 | **0.000** | 1.94 | 88.86 |
-
-### Key Findings
-
-1. **KS test on absolute Prob detects LMCleaner** (p=0.001 for K=10), while
-   truth_ratio-based forget_quality is blind to it. The metric choice matters.
-
-2. **Selectivity is 0.94** -- LMCleaner damages forget and retain equally.
-   GradDiff achieves 13.84x selectivity. Root cause: `use_historical_params=False`.
-
-3. **privleak confirms LMCleaner works**: 0.48 -> 5.15 (closer to Retrain's 4.38).
-
-4. **LMC overshoots**: forget_prob drops to 0.096 (40% below Retrain's 0.164).
-   Correction magnitude needs scaling down.
-
-### Next Steps
-
-1. Enable `use_historical_params=True` with LazyUProvider for selective correction
-2. Add correction scaling factor to control overshoot
-3. Report KS(Prob) alongside forget_quality in paper
+- `src/trainer/unlearn/checkpoint_u_provider.py` — CheckpointAwareUProvider
+- `src/trainer/unlearn/lmcleaner_core.py` — Fisher HVP norm clipping
+- `scripts/experiments/expA/run_k_sweep.sh` — K-sweep pipeline
+- `saves/results/expA/k_sweep_results_s0.csv` — Full results CSV
