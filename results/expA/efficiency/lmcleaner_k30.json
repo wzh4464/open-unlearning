@@ -1,0 +1,6 @@
+{
+  "unlearning_time_seconds": 7110.3519461955875,
+  "total_steps": 63,
+  "peak_gpu_memory_mb": null,
+  "method": "LMCleaner_K30"
+}
