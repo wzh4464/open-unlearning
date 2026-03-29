@@ -50,7 +50,8 @@ if not eta:
         step_id = int(re.search(r'(\d+)', f.stem).group())
         with open(f, 'rb') as fp:
             records = pickle.load(fp)
-        eta[records[0]['step_id']] = records[0]['eta']
+        for rec in records:
+            eta[rec['step_id']] = rec['eta']
         del records
 with open(log_dir / 'eta_cache.json', 'w') as fp:
     json.dump(eta, fp)

@@ -62,7 +62,7 @@ class CheckpointAwareUProvider:
         collator=None,
         device: str = "cuda",
         micro_batch_size: int = 4,
-        base_model_path: Optional[str] = None,
+        max_cache: int = 5,
     ):
         self.model = model
         self.checkpoint_dir = Path(checkpoint_dir)
@@ -72,7 +72,6 @@ class CheckpointAwareUProvider:
         self.collator = collator
         self.device = device
         self.micro_batch_size = micro_batch_size
-        self.base_model_path = base_model_path
 
         # Build checkpoint index: step_id -> checkpoint file path
         self._checkpoint_index: Dict[int, Path] = {}
@@ -80,7 +79,7 @@ class CheckpointAwareUProvider:
 
         # Cache: step_id -> u[t] tensor (CPU, bf16). Limited to max_cache entries.
         self._cache: Dict[int, torch.Tensor] = {}
-        self._max_cache: int = 5  # ~30GB max (5 × 6GB)
+        self._max_cache: int = max_cache
         self._stats = {"recomputed": 0, "cache_hits": 0, "chain_steps": 0}
 
         # Save θ[τ] for restoration
@@ -159,8 +158,10 @@ class CheckpointAwareUProvider:
             eta = self.eta_cache.get(t)
             indices = self.sample_indices.get(t)
             if eta is None or not indices:
-                # Can't compute this step, skip but still need to advance
-                # Use approximate u (at current theta which may have drifted)
+                logger.warning(
+                    f"Missing eta/indices for step {t} during replay from "
+                    f"checkpoint {checkpoint_step}; θ reconstruction may be inexact"
+                )
                 continue
 
             u = self._compute_gradient_update(eta, indices)
@@ -205,6 +206,10 @@ class CheckpointAwareUProvider:
             eta = self.eta_cache.get(t)
             indices = self.sample_indices.get(t)
             if eta is None or not indices:
+                logger.warning(
+                    f"Missing eta/indices for step {t} during replay; "
+                    f"θ reconstruction may be inexact"
+                )
                 continue
 
             u = self._compute_gradient_update(eta, indices)
@@ -299,6 +304,8 @@ class CheckpointAwareUProvider:
                 outputs = self.model(**micro)
                 (outputs.loss / n_micro).backward()
                 del outputs, micro
+
+            if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
             if hasattr(self.model, "gradient_checkpointing_disable") and not _gc_was_enabled:
