@@ -34,10 +34,10 @@ WARMUP_EPOCHS="0.1"  # 10% warmup for single-epoch training
 # ============================================
 # Data Splits
 # ============================================
-FORGET_SPLIT="forget01"
-RETAIN_SPLIT="retain99"
-HOLDOUT_SPLIT="holdout01"
-FORGET_INDICES_FILE="configs/forget_indices/forget01.json"
+FORGET_SPLIT="forget10"
+RETAIN_SPLIT="retain90"
+HOLDOUT_SPLIT="holdout10"
+FORGET_INDICES_FILE="configs/forget_indices/forget10.json"
 
 # ============================================
 # LMCleaner Parameters
