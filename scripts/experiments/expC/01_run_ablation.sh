@@ -63,7 +63,7 @@ run_lmcleaner() {
         trainer.method_args.damping=${DAMPING} \
         trainer.method_args.epsilon=${EPSILON} \
         trainer.method_args.delta=${DEFAULT_DELTA} \
-        trainer.method_args.noise_mode=${NOISE_MODE} \
+        trainer.method_args.noise_mode=isotropic \
         trainer.method_args.beta=${BETA} \
         trainer.method_args.projector_rank=${PROJ_RANK} \
         trainer.method_args.projector_seed=${PROJ_SEED} \

@@ -40,7 +40,7 @@ for EPS in "${EPSILON_VALUES[@]}"; do
         trainer.method_args.damping=${DAMPING} \
         trainer.method_args.epsilon=${EPS} \
         trainer.method_args.delta=${DEFAULT_DELTA} \
-        trainer.method_args.noise_mode=subspace \
+        trainer.method_args.noise_mode=isotropic \
         trainer.method_args.beta=${BETA} \
         trainer.method_args.projector_rank=${PROJ_RANK} \
         trainer.method_args.projector_seed=${PROJ_SEED} \
