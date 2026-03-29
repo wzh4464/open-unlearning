@@ -399,32 +399,42 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                     tz, include_tensors=False
                 )
 
-                if initial_rec_dict is None:
-                    logger.warning(f"No record found for step {tz}, skipping")
-                    continue
-
-                # Get u[tz] via recomputation (0.6s) instead of disk load (38s)
+                # Get u[tz]: prefer u_provider (recompute at historical θ[t])
                 u_tz = None
                 if u_provider is not None:
                     u_tz = u_provider.get_u(tz)
-                if u_tz is None:
-                    # Fallback: load from disk
-                    full_rec = self.lazy_loader.load_single_step(tz, include_tensors=True)
-                    if full_rec is not None:
-                        u_tz = full_rec.get("u")
-                    del full_rec
 
-                # 创建初始 StepRecord
-                initial_record = StepRecord(
-                    step_id=initial_rec_dict["step_id"],
-                    eta=initial_rec_dict["eta"],
-                    batch_id=initial_rec_dict["batch_id"],
-                    u=u_tz,
-                    gbar=initial_rec_dict.get("gbar"),
-                    diag_H=initial_rec_dict.get("diag_H"),
-                    batch_data=initial_rec_dict.get("batch_data"),
-                )
-                del initial_rec_dict
+                if initial_rec_dict is None:
+                    # No pkl on disk — construct record from u_provider + eta_cache
+                    if u_tz is None:
+                        logger.warning(f"No record and no u_provider for step {tz}, skipping")
+                        continue
+                    eta_tz = self.lazy_loader.get_etas_for_steps([tz]).get(tz, 0)
+                    if eta_tz == 0:
+                        logger.warning(f"No eta for step {tz}, skipping")
+                        continue
+                    initial_record = StepRecord(
+                        step_id=tz, eta=eta_tz, batch_id=tz,
+                        u=u_tz, gbar=None, diag_H=None, batch_data=None,
+                    )
+                else:
+                    # pkl exists — use it for metadata, prefer u_provider for u[tz]
+                    if u_tz is None:
+                        full_rec = self.lazy_loader.load_single_step(tz, include_tensors=True)
+                        if full_rec is not None:
+                            u_tz = full_rec.get("u")
+                        del full_rec
+
+                    initial_record = StepRecord(
+                        step_id=initial_rec_dict["step_id"],
+                        eta=initial_rec_dict["eta"],
+                        batch_id=initial_rec_dict["batch_id"],
+                        u=u_tz,
+                        gbar=initial_rec_dict.get("gbar"),
+                        diag_H=initial_rec_dict.get("diag_H"),
+                        batch_data=initial_rec_dict.get("batch_data"),
+                    )
+                    del initial_rec_dict
 
                 # 调用核心计算函数 (使用 lazy loading 模式)
                 v, audit = compute_correction(
