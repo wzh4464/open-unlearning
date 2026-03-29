@@ -3,13 +3,13 @@
 # Shared configuration
 
 MODEL="Llama-3.2-1B-Instruct"
-FORGET_SPLIT="forget01"
-RETAIN_SPLIT="retain99"
+FORGET_SPLIT="forget10"
+RETAIN_SPLIT="retain90"
 HOLDOUT_SPLIT="holdout10"
 
-# Use B=16 training (existing, well-validated)
+# Use B=16 training with 5-epoch model for best results
 TRAIN_LOG_DIR="/workspace/saves/train_logs/llama32_1b_tofu_safe"
-MODEL_DIR="/workspace/saves/finetune/llama32_1b_tofu_safe/checkpoint-250"
+MODEL_DIR="/workspace/saves/finetune/llama32_1b_tofu_safe"
 MAX_STEP=250
 
 # Fixed LMCleaner params
@@ -28,7 +28,7 @@ DEFAULT_EPSILON=1.0
 DEFAULT_DELTA=1e-5
 
 # Epsilon sweep values
-EPSILON_VALUES=(0.25 0.5 1.0 2.0 4.0)
+EPSILON_VALUES=(1.0 10 100 1000)
 
 # Seeds for multi-seed runs
 SEEDS=(0 1 2)

@@ -88,7 +88,7 @@ for B in "${B_LIST[@]}"; do
             trainer.method_args.max_step=${MAX_STEP} \
             trainer.method_args.hessian_mode=${HESSIAN_MODE} \
             trainer.method_args.damping=${DAMPING} \
-            trainer.method_args.use_historical_params=false \
+            trainer.method_args.use_historical_params=true \
             trainer.args.num_train_epochs=0 \
             paths.output_dir="${OUT_DIR}" \
             task_name="${TASK}" \

@@ -6,8 +6,8 @@
 MODEL="Llama-3.2-1B-Instruct"
 
 # === Forget/Retain splits ===
-FORGET_SPLIT="forget01"
-RETAIN_SPLIT="retain99"
+FORGET_SPLIT="forget10"
+RETAIN_SPLIT="retain90"
 HOLDOUT_SPLIT="holdout10"
 
 # === K values to sweep ===
