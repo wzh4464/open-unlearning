@@ -52,7 +52,7 @@ $PYTHON_CMD src/train.py --config-name=unlearn.yaml \
     ++trainer.args.bf16=true \
     trainer.args.efficiency_tracking.enabled=true \
     model.model_args.attn_implementation=eager \
-    trainer.method_args.use_historical_params=false
+    trainer.method_args.use_historical_params=true
 
 echo ""
 echo "LMCleaner unlearning complete!"

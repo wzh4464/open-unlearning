@@ -50,6 +50,8 @@ $PYTHON_CMD src/train.py --config-name=train.yaml \
     +trainer.args.training_logger.save_batch_data=false \
     +trainer.args.training_logger.save_rng_state=true \
     +trainer.args.training_logger.save_interval=1 \
+    +trainer.args.training_logger.save_sparse_checkpoints=true \
+    +trainer.args.training_logger.checkpoint_stride=10 \
     ++trainer.args.efficiency_tracking.enabled=true
 
 echo ""

@@ -330,30 +330,48 @@ class LMCleanerBatchLevel(UnlearnTrainer):
                 max_cache_entries=4,
             )
 
-        # Create lazy u[t] provider for on-demand recomputation
+        # Create u[t] provider for on-demand recomputation
         # Recompute u[t] = -η*grad instead of loading 6GB pkl from disk (~0.6s vs ~38s)
         u_provider = None
+        sparse_ckpt_dir = self.training_log_dir / "sparse_checkpoints"
         if self.batch_reconstructor is not None and self.lazy_loader is not None:
-            from .lazy_u_provider import LazyUProvider
             # Load sample_indices and eta_cache
             si_map = getattr(self.lazy_loader, "sample_indices", {})
             eta_map = self.lazy_loader.get_etas_for_steps(list(range(tau + 1)))
             finetune_dataset = getattr(self.batch_reconstructor, "dataset", None)
             collator = getattr(self.batch_reconstructor, "data_collator", None)
             if finetune_dataset is not None and si_map:
-                u_provider = LazyUProvider(
-                    lazy_loader=self.lazy_loader,
-                    model=self.model,
-                    dataset=finetune_dataset,
-                    sample_indices=si_map,
-                    eta_cache=eta_map,
-                    collator=collator,
-                    device=str(next(self.model.parameters()).device),
-                )
-                logger.info(
-                    f"LazyUProvider initialized: will recompute u[t] for "
-                    f"steps without saved pkl"
-                )
+                # Prefer CheckpointAwareUProvider when sparse checkpoints exist
+                if sparse_ckpt_dir.exists() and any(sparse_ckpt_dir.iterdir()):
+                    from .checkpoint_u_provider import CheckpointAwareUProvider
+                    u_provider = CheckpointAwareUProvider(
+                        model=self.model,
+                        checkpoint_dir=sparse_ckpt_dir,
+                        dataset=finetune_dataset,
+                        sample_indices=si_map,
+                        eta_cache=eta_map,
+                        collator=collator,
+                        device=str(next(self.model.parameters()).device),
+                    )
+                    logger.info(
+                        f"CheckpointAwareUProvider initialized: will compute u[t] "
+                        f"at historical θ[t] using sparse checkpoints"
+                    )
+                else:
+                    from .lazy_u_provider import LazyUProvider
+                    u_provider = LazyUProvider(
+                        lazy_loader=self.lazy_loader,
+                        model=self.model,
+                        dataset=finetune_dataset,
+                        sample_indices=si_map,
+                        eta_cache=eta_map,
+                        collator=collator,
+                        device=str(next(self.model.parameters()).device),
+                    )
+                    logger.info(
+                        f"LazyUProvider initialized: will recompute u[t] for "
+                        f"steps without saved pkl"
+                    )
 
         for i, tz in enumerate(forget_steps):
             logger.info(f"Processing forget step {i + 1}/{len(forget_steps)}: tz={tz}")

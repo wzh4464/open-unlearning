@@ -855,12 +855,14 @@ class HistoricalParamProvider:
         lazy_loader: Optional[LazyLoaderProtocol] = None,
         step_log: Optional[StepLog] = None,
         max_cache_entries: int = 4,
+        u_provider: Optional["UProviderProtocol"] = None,
     ):
         self.model = model
         self.log_dir = Path(log_dir) if log_dir else None
         self.lazy_loader = lazy_loader
         self.step_log = step_log
         self.max_cache_entries = max_cache_entries
+        self.u_provider = u_provider
 
         # Load checkpoint index
         self._checkpoint_index: Dict[int, str] = {}
@@ -899,7 +901,7 @@ class HistoricalParamProvider:
         self._active = False  # Whether we're in an active historical session
 
     def _load_u(self, t: int) -> Optional[torch.Tensor]:
-        """Load u[t] from lazy_loader or step_log."""
+        """Load u[t] from lazy_loader, step_log, or u_provider (fallback)."""
         if t in self._u_vectors:
             return self._u_vectors[t]
         if self.lazy_loader is not None:
@@ -907,11 +909,15 @@ class HistoricalParamProvider:
             if rec_dict is not None:
                 u_val = rec_dict.get("u")
                 del rec_dict
-                return u_val
-        elif self.step_log is not None:
+                if u_val is not None:
+                    return u_val
+        if self.step_log is not None:
             srec = self.step_log[t]
-            if srec is not None:
+            if srec is not None and srec.u is not None:
                 return srec.u
+        # Fallback: u_provider (e.g. CheckpointAwareUProvider or LazyUProvider)
+        if self.u_provider is not None:
+            return self.u_provider.get_u(t)
         return None
 
     def _find_nearest_checkpoint(self, step_id: int) -> Optional[int]:
@@ -1199,6 +1205,7 @@ def compute_correction(
 
     # 确保 v 在正确的设备上 (从训练日志加载的 u/gbar 可能在 CPU 上)
     v = v.to(cfg.device)
+    v0_norm = v.norm().item()  # Save for norm clipping in Phase 2
 
     # 清理初始记录
     if use_lazy_loading and initial_record is not None:
@@ -1390,6 +1397,14 @@ def compute_correction(
         # 添加阻尼: v ← v - η[s] * λ * v (实现添加，论文未包含)
         if cfg.damping > 0:
             v = v - eta * cfg.damping * v
+
+        # Norm clipping: prevent numerical explosion in Fisher HVP iteration
+        v_norm_cur = v.norm().item()
+        v_clip_threshold = max(10 * v0_norm, 0.05)
+        if v_norm_cur != v_norm_cur or v_norm_cur > v_clip_threshold:
+            # NaN or exploding: clip to initial v0 norm
+            v = v * (v0_norm / max(v_norm_cur, 1e-10)) if v_norm_cur == v_norm_cur else torch.zeros_like(v)
+            logger.debug(f"Clipped v at step {s}: {v_norm_cur:.4f} -> {v.norm().item():.4f} (threshold={v_clip_threshold:.4f})")
 
         hvp_calls += 1
 
