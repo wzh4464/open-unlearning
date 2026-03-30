@@ -47,6 +47,13 @@ HESSIAN_MODE="fisher"
 DAMPING="0.0001"
 
 # ============================================
+# Post-Finetune Parameters (retain-set recovery)
+# ============================================
+POSTFT_LEARNING_RATE="1e-5"
+POSTFT_EPOCHS=1
+POSTFT_WARMUP_EPOCHS="0.1"
+
+# ============================================
 # PDU Parameters
 # ============================================
 PDU_RETAIN_LOSS_EPS="0.3"
@@ -83,6 +90,59 @@ get_unlearn_output_dir() {
     local method=$1
     local seed=${2:-$SEED}
     echo "${UNLEARN_BASE_DIR}/$(get_unlearn_task_name $method $seed)"
+}
+
+get_postft_task_name() {
+    local method=$1
+    local seed=${2:-$SEED}
+    echo "expA_${method}_postft_s${seed}"
+}
+
+get_postft_output_dir() {
+    local method=$1
+    local seed=${2:-$SEED}
+    echo "saves/finetune/$(get_postft_task_name $method $seed)"
+}
+
+# Post-finetune an unlearned model on retain set
+# Usage: run_postft <method_name> <unlearned_model_dir>
+run_postft() {
+    local method=$1
+    local model_dir=$2
+    local task_name=$(get_postft_task_name "$method")
+    local output_dir=$(get_postft_output_dir "$method")
+
+    echo "----------------------------------------------"
+    echo "Post-finetune: ${task_name}"
+    echo "Source: ${model_dir}"
+    echo "Output: ${output_dir}"
+    echo "----------------------------------------------"
+
+    if [ ! -d "${model_dir}" ]; then
+        echo "WARNING: Model not found: ${model_dir}. Skipping post-finetune."
+        return
+    fi
+
+    $PYTHON_CMD src/train.py --config-name=train.yaml \
+        experiment=finetune/tofu/default \
+        task_name="${task_name}" \
+        model="${MODEL_NAME}" \
+        model.model_args.pretrained_model_name_or_path="${model_dir}" \
+        model.tokenizer_args.pretrained_model_name_or_path="${BASE_MODEL_PATH}" \
+        model.model_args.attn_implementation=sdpa \
+        'data.train.TOFU_QA_full.args.hf_args.name=retain90' \
+        trainer.args.num_train_epochs=${POSTFT_EPOCHS} \
+        trainer.args.learning_rate=${POSTFT_LEARNING_RATE} \
+        trainer.args.weight_decay=${WEIGHT_DECAY} \
+        trainer.args.warmup_epochs=${POSTFT_WARMUP_EPOCHS} \
+        trainer.args.per_device_train_batch_size=${PER_DEVICE_BATCH_SIZE} \
+        trainer.args.gradient_accumulation_steps=${GRADIENT_ACCUMULATION_STEPS} \
+        trainer.args.gradient_checkpointing=true \
+        trainer.args.seed=${SEED} \
+        ++trainer.args.bf16=true \
+        ++trainer.args.save_strategy=epoch
+
+    echo "Post-finetune complete: ${task_name}"
 }
 
 print_config() {

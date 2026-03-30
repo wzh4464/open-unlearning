@@ -55,8 +55,8 @@ run_step 1 "01_finetune_full.sh" "Finetune on full TOFU (1 epoch)"
 # Step 2: Retrain on retain90 (gold standard)
 run_step 2 "02_retrain_retain.sh" "Retrain on retain90 (gold standard)"
 
-# Step 3: LMCleaner
-run_step 3 "03_lmcleaner.sh" "LMCleaner Unlearning"
+# Step 3: LMCleaner + Post-finetune on retain set
+run_step 3 "03_lmcleaner.sh" "LMCleaner Unlearning + Post-Finetune"
 
 # Step 4: Baselines (GradDiff, NPO, PDU, UNDIAL)
 run_step 4 "04_baselines.sh" "Baseline Unlearning (GradDiff, NPO, PDU, UNDIAL)"

@@ -35,6 +35,18 @@ def find_methods(seed=0):
         if d.exists():
             methods[m.upper() if m != "lmcleaner" else "LMCleaner"] = d
 
+    # LMCleaner post-finetune variants
+    postft_dir = Path("saves/finetune")
+    d = postft_dir / f"expA_lmcleaner_postft_s{seed}"
+    if d.exists():
+        methods["LMCleaner+PostFT"] = d
+
+    # K-sweep post-finetune variants
+    for k in [10, 20, 30, 40, 50]:
+        d = postft_dir / f"expA_lmcleaner_k{k}_postft_s{seed}"
+        if d.exists():
+            methods[f"LMC_K{k}+PostFT"] = d
+
     return methods
 
 

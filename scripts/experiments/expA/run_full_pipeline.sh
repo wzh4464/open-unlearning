@@ -107,6 +107,9 @@ echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
 echo "--- Models ---"
 for K in 10 20 30 40 50; do
     test -f "saves/unlearn/expA_lmcleaner_k${K}_s${SEED}/model.safetensors" && echo "  LMC_K${K}: ✓" || echo "  LMC_K${K}: ✗"
+    # Check for sharded safetensors (model-00001-of-*.safetensors) as well
+    POSTFT="saves/finetune/expA_lmcleaner_k${K}_postft_s${SEED}"
+    (test -f "${POSTFT}/model.safetensors" || ls ${POSTFT}/model-00001-of-*.safetensors >/dev/null 2>&1) && echo "  LMC_K${K}+PostFT: ✓" || echo "  LMC_K${K}+PostFT: ✗"
 done
 for M in graddiff npo pdu undial; do
     test -f "saves/unlearn/expA_${M}_s${SEED}/model.safetensors" && echo "  ${M}: ✓" || echo "  ${M}: ✗"

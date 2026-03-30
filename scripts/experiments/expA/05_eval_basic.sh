@@ -88,6 +88,12 @@ fi
 TASK_NAME=$(get_unlearn_task_name "lmcleaner")
 evaluate_model "$(get_unlearn_output_dir "lmcleaner")" "${TASK_NAME}" "${RETRAIN_EVAL_JSON}" "${ORIGINAL_EVAL_JSON}"
 
+# 3b. Evaluate LMCleaner post-finetune
+POSTFT_DIR=$(get_postft_output_dir "lmcleaner")
+if [ -d "${POSTFT_DIR}" ]; then
+    evaluate_model "${POSTFT_DIR}" "$(get_postft_task_name "lmcleaner")" "${RETRAIN_EVAL_JSON}" "${ORIGINAL_EVAL_JSON}"
+fi
+
 # 4. Evaluate all baselines
 for METHOD in "${BASELINE_METHODS[@]}"; do
     METHOD_LOWER="${METHOD,,}"

@@ -1,9 +1,10 @@
 {
-    "extraction_strength": 0.042341233783279024,
-    "forget_Q_A_Prob": 0.048682632446289065,
-    "forget_Q_A_ROUGE": 0.3222332187319033,
-    "forget_quality": 6.392505006995772e-06,
-    "forget_truth_ratio": 0.7554131390035718,
-    "model_utility": 0.2049293220278427,
-    "privleak": 50.794054650005215
+    "extraction_strength": 0.050912534344425255,
+    "forget_Q_A_Prob": 0.07697845458984375,
+    "forget_Q_A_ROUGE": 0.31779726810884723,
+    "forget_prob_ks": 1.3092627063797803e-28,
+    "forget_quality": 0.18096072488295206,
+    "forget_truth_ratio": 0.7501259119378644,
+    "model_utility": 0.27513945134100753,
+    "privleak": 0.1938794730971418
 }

@@ -1,8 +1,8 @@
 {
-    "extraction_strength": 0.03250892997513522,
-    "forget_Q_A_Prob": 0.0005911898612976074,
-    "forget_Q_A_ROUGE": 0.0,
-    "forget_truth_ratio": 0.7337401636937092,
-    "model_utility": 0.0,
-    "privleak": -11.569374997686117
+    "extraction_strength": 0.05861729724883508,
+    "forget_Q_A_Prob": 0.1261370849609375,
+    "forget_Q_A_ROUGE": 0.2718721222553976,
+    "forget_truth_ratio": 0.7457352799820438,
+    "model_utility": 0.31999517306139313,
+    "privleak": 0.0
 }

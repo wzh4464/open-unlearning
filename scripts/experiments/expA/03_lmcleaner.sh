@@ -57,3 +57,8 @@ $PYTHON_CMD src/train.py --config-name=unlearn.yaml \
 echo ""
 echo "LMCleaner unlearning complete!"
 echo "Model: ${OUTPUT_DIR}"
+
+# Post-finetune on retain set
+echo ""
+echo ">>> Post-finetune LMCleaner on retain set <<<"
+run_postft "lmcleaner" "${OUTPUT_DIR}"

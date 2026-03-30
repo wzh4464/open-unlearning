@@ -5,5 +5,5 @@
     "forget_quality": 0.06521994354498474,
     "forget_truth_ratio": 0.7457294657743262,
     "model_utility": 0.3241842585833919,
-    "privleak": 53.583670803280256
+    "privleak": -0.16401652107981463
 }

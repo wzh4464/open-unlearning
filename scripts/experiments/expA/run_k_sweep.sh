@@ -53,6 +53,20 @@ for K_VAL in 10 20 30 40 50; do
 done
 
 # =============================================
+# Step 1b: Post-finetune LMCleaner variants on retain set
+# =============================================
+for K_VAL in 10 20 30 40 50; do
+    LMC_DIR="saves/unlearn/expA_lmcleaner_k${K_VAL}_s${SEED}"
+    if [ -d "${LMC_DIR}" ]; then
+        echo ""
+        echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+        echo "[$(date '+%H:%M:%S')] Post-finetune LMCleaner K=${K_VAL}"
+        echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+        run_postft "lmcleaner_k${K_VAL}" "${LMC_DIR}"
+    fi
+done
+
+# =============================================
 # Step 2: Baselines
 # =============================================
 echo ""
@@ -123,6 +137,14 @@ for K_VAL in 10 20 30 40 50; do
     eval_model "saves/unlearn/expA_lmcleaner_k${K_VAL}_s${SEED}" "expA_lmcleaner_k${K_VAL}" "${ORIGINAL_EVAL_JSON}"
 done
 
+# Eval LMCleaner post-finetune variants
+for K_VAL in 10 20 30 40 50; do
+    POSTFT_DIR="saves/finetune/expA_lmcleaner_k${K_VAL}_postft_s${SEED}"
+    if [ -d "${POSTFT_DIR}" ]; then
+        eval_model "${POSTFT_DIR}" "expA_lmcleaner_k${K_VAL}_postft" "${ORIGINAL_EVAL_JSON}"
+    fi
+done
+
 # Eval baselines
 for METHOD in "${BASELINE_METHODS[@]}"; do
     METHOD_LOWER="${METHOD,,}"
@@ -188,6 +210,9 @@ for k in [10, 20, 30, 40, 50]:
     d = Path(f"saves/unlearn/expA_lmcleaner_k{k}_s{seed}")
     if d.exists():
         methods[f"LMCleaner_K{k}"] = d
+    d = Path(f"saves/finetune/expA_lmcleaner_k{k}_postft_s{seed}")
+    if d.exists():
+        methods[f"LMC_K{k}+PostFT"] = d
 for m in ["graddiff", "npo", "pdu", "undial"]:
     d = Path(f"saves/unlearn/expA_{m}_s{seed}")
     if d.exists():

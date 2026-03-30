@@ -4,252 +4,137 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-Open-Unlearning is a unified framework for LLM unlearning research that supports multiple benchmarks (TOFU, MUSE, WMDP), 12+ unlearning methods, 10+ evaluation metrics, and 7+ model architectures. The framework uses Hydra for configuration management and supports both single-GPU and distributed training.
+Open-Unlearning is a unified framework for LLM unlearning research. It supports TOFU, MUSE, and WMDP benchmarks, 12+ unlearning methods, 10+ evaluation metrics, and 7+ model architectures. Built on Hydra for configuration and HuggingFace Transformers/Accelerate for training.
 
-## Common Development Commands
-
-### Environment Setup
-
-This project can use either `uv` or standard Python/pip for environment management.
+## Commands
 
 ```bash
-# Option 1: Using uv (recommended for reproducible builds)
-uv sync                          # Install all dependencies from lock file
-uv sync --extra lm_eval          # Include lm-evaluation-harness
-uv sync --extra dev              # Include development tools (ruff, pre-commit)
+# Install dependencies
+uv sync                          # Core dependencies
+uv sync --extra dev              # Include ruff, pytest
 
-# Option 2: Using pip directly
-pip install -e .                 # Install in editable mode
-pip install -e ".[lm_eval]"      # Include lm-evaluation-harness
-pip install -e ".[dev]"          # Include development tools
+# Code quality
+make quality                     # Lint + format check (ruff)
+make style                       # Auto-fix lint + format
 
-# Run Python scripts (use python directly, not uv run)
-python setup_data.py --eval      # Download evaluation data
-python src/train.py ...          # Run training scripts
-```
+# Tests (runs CPU-only via CUDA_VISIBLE_DEVICES=)
+make test                        # All tests
+CUDA_VISIBLE_DEVICES= uv run pytest tests/test_eval_metrics.py -v          # Single file
+CUDA_VISIBLE_DEVICES= uv run pytest tests/test_eval_metrics.py::TestClass::test_method -v  # Single test
 
-### Code Quality and Testing
-
-```bash
-# Check code quality (linting and formatting)
-make quality
-
-# Apply code formatting fixes
-make style
-
-# Run tests
-make test
-# Or explicitly: CUDA_VISIBLE_DEVICES= pytest tests/
-```
-
-### Training and Evaluation
-
-```bash
-# Run unlearning training
+# Training
 python src/train.py --config-name=unlearn.yaml experiment=unlearn/tofu/default \
   forget_split=forget10 retain_split=retain90 trainer=GradAscent task_name=SAMPLE_UNLEARN
 
-# Run evaluation
+# Evaluation
 python src/eval.py --config-name=eval.yaml experiment=eval/tofu/default \
   model=Llama-3.2-1B-Instruct task_name=SAMPLE_EVAL
 
-# Run distributed training
+# Distributed training
 CUDA_VISIBLE_DEVICES=0,1 accelerate launch \
   --config_file configs/accelerate/default_config.yaml --main_process_port 18765 \
   src/train.py --config-name=unlearn.yaml experiment=unlearn/muse/default task_name=DISTRIBUTED_TRAIN
 
-# Run baseline experiments
-bash scripts/tofu_unlearn.sh
-bash scripts/muse_unlearn.sh
+# Data setup
+python setup_data.py --eval      # Download evaluation reference logs
 ```
 
-## Architecture and Structure
+## Architecture
 
-### Core Components
+### Entry Points & Pipeline Flow
 
-- **src/train.py**: Main training entry point using Hydra config management
-- **src/eval.py**: Evaluation entry point for running benchmarks
-- **src/trainer/**: Contains unlearning method implementations (NPO, DPO, GradAscent, etc.)
-- **src/evals/**: Benchmark implementations (TOFU, MUSE, WMDP) and evaluation metrics
-- **src/data/**: Data preprocessing and dataset handling
-- **src/model/**: Model loading and configuration utilities
+**Training** (`src/train.py`): Hydra config → `get_model()` → `get_data()` → `get_collators()` → `load_trainer()` → `train()` → save model
+
+**Evaluation** (`src/eval.py`): Hydra config → `get_model()` → `get_evaluators()` → for each evaluator: `evaluate(model, tokenizer, template_args)` → save JSON results
+
+Both use `@hydra.main()` with configs from `configs/`.
+
+### Registry Pattern (Central to Everything)
+
+All major components use the same pattern — a module-level `REGISTRY` dict, a `_register_*()` function, and a `load_*()` / `get_*()` factory:
+
+| Registry | Location | Key = | Value = |
+|---|---|---|---|
+| `TRAINER_REGISTRY` | `src/trainer/__init__.py` | Class name (e.g., `"GradAscent"`) | Class |
+| `EVALUATOR_REGISTRY` | `src/evals/__init__.py` | Class name (e.g., `"TOFUEvaluator"`) | Class |
+| `DATASET_REGISTRY` | `src/data/__init__.py` | Class name (e.g., `"QADataset"`) | Class |
+| `COLLATOR_REGISTRY` | `src/data/__init__.py` | Class name | Class |
+| `MODEL_REGISTRY` | `src/model/__init__.py` | Class name (e.g., `"AutoModelForCausalLM"`) | Class |
+| `METRICS_REGISTRY` | `src/evals/metrics/__init__.py` | Metric name | `UnlearningMetric` |
+
+Config YAML files reference registry keys via `handler:` field. E.g., `configs/trainer/GradAscent.yaml` has `handler: GradAscent` which maps to `TRAINER_REGISTRY["GradAscent"]`.
+
+### Trainer Hierarchy
+
+```
+HF Trainer
+  └─ FinetuneTrainer (src/trainer/base.py) — adds callbacks, training logger support
+       └─ UnlearnTrainer (src/trainer/unlearn/base.py) — adds ref model, DeepSpeed handling
+            └─ GradAscent, GradDiff, NPO, DPO, SimNPO, RMU, UNDIAL, ...
+```
+
+Each method overrides `compute_loss(model, inputs, return_outputs)`. Method-specific hyperparams come from `trainer.method_args` in config and are passed as kwargs to the constructor.
+
+### Data Pipeline for Unlearning
+
+`get_data(cfg, mode="unlearn")` loads separate forget/retain datasets, then wraps them in `ForgetRetainDataset` (in `src/data/unlearn.py`). This composite dataset anchors on one split (default: forget) and randomly samples from the other, yielding `{'forget': ..., 'retain': ...}` pairs. The `anchor` parameter controls which split drives iteration length.
+
+### Evaluation System
+
+`Evaluator` base class (`src/evals/base.py`) loads metrics from config, runs them, caches results as JSON. Each metric is an `UnlearningMetric` (`src/evals/metrics/base.py`) wrapping a metric function. Metrics can declare dependencies (`pre_compute` metrics). Results saved to `saves/eval/{task_name}/`.
+
+Metric configs use Hydra's `@package` directive to nest into the evaluation config tree (e.g., `@package eval.tofu.metrics.forget_Q_A_ROUGE`).
 
 ### Configuration System
-The framework uses Hydra for configuration management with these key config types:
 
-- **configs/train.yaml**: Base training configuration
-- **configs/unlearn.yaml**: Unlearning-specific training configuration  
-- **configs/eval.yaml**: Evaluation configuration
-- **configs/experiment/**: Predefined experiment configurations for common use cases
-- **configs/trainer/**: Method-specific trainer configurations (GradAscent.yaml, NPO.yaml, etc.)
-- **configs/model/**: Model-specific configurations (Llama-2-7b-hf.yaml, etc.)
+Hydra configs compose hierarchically:
 
-### Output Directory Structure
-Experiments generate outputs in `./saves/${mode}/${task_name}` where:
+- **Base**: `configs/train.yaml`, `configs/unlearn.yaml`, `configs/eval.yaml`
+- **Components**: `configs/trainer/*.yaml`, `configs/model/*.yaml`, `configs/data/datasets/*.yaml`
+- **Experiments**: `configs/experiment/` — pre-composed setups that override all component defaults
+- **Metrics**: `configs/eval/tofu_metrics/*.yaml` — use `@package` for nesting
 
-- `mode`: train/eval/unlearn
-- `task_name`: User-provided experiment identifier
+Key override syntax:
+- Dot notation: `trainer.method_args.K=1000`
+- Add new keys: `++trainer.args.bf16=true`
+- Override model path: `model.model_args.pretrained_model_name_or_path=path/to/model`
 
-### Key Patterns
+### Output Structure
 
-1. **Hydra Integration**: All entry points use `@hydra.main()` decorator with config management
-2. **Component Factory Pattern**: Components are loaded via factory functions (`get_model()`, `get_data()`, `get_evaluators()`)
-3. **Configuration Overrides**: Command-line arguments can override any config parameter using dot notation
-4. **Distributed Training**: Uses Accelerate/DeepSpeed for multi-GPU training with automatic device management
+All outputs go to `saves/{mode}/{task_name}/` where mode is `train`, `unlearn`, or `eval`.
 
-### Benchmarks and Methods
+### Adding a New Unlearning Method
 
-- **Benchmarks**: TOFU (fictitious unlearning), MUSE (six-way evaluation), WMDP (hazardous knowledge)
-- **Unlearning Methods**: GradAscent, GradDiff, NPO, SimNPO, DPO, RMU, UNDIAL, AltPO, SatImp, WGA, CE-U, PDU
-- **Evaluation Metrics**: Verbatim metrics, ROUGE scores, MIA attacks, utility metrics, memorization tests
+1. Create `src/trainer/unlearn/mymethod.py` — class inherits `UnlearnTrainer`, override `compute_loss()`
+2. Import and register in `src/trainer/__init__.py`: `_register_trainer(MyMethod)`
+3. Create `configs/trainer/MyMethod.yaml` with `handler: MyMethod` and `method_args:`
+4. Optionally create experiment config in `configs/experiment/unlearn/`
 
-### Development Guidelines
+### Adding a New Metric
 
-**Core Principles**:
+1. Create metric function in `src/evals/metrics/`
+2. Register as `UnlearningMetric` in `src/evals/metrics/__init__.py`
+3. Create config in `configs/eval/tofu_metrics/` with `@package` directive
+4. Add to defaults list in the benchmark's eval config
 
-1. **Reuse Over Reinvention**: Always reuse existing interfaces and components
-   - Search the codebase before implementing new functionality
-   - Use existing factory patterns, callbacks, and configuration systems
-   - Extend existing classes rather than creating parallel implementations
+## Key Technical Details
 
-2. **Verify Before Implementing**: Never blindly guess implementation details
-   - Search the repository to understand existing patterns
-   - Search online documentation when uncertain about APIs
-   - Check existing similar implementations for reference
-   - Ask questions when requirements are unclear
+- `pytest` config sets `pythonpath = ["src"]` so imports use module names directly (e.g., `from trainer.base import FinetuneTrainer`)
+- `template_args` (chat template format) flows through the entire pipeline: model config → trainer → data processing → evaluation
+- Reference models for KL/DPO methods: `UnlearnTrainer` handles loading; uses ZeRO-0 when model uses ZeRO-3
+- `ForgetRetainDataset` indices differ from original finetune dataset indices — relevant for LMCleaner batch reconstruction
+- TrainingLogger and callbacks (EfficiencyTracker, SpectralNorm) only initialize on rank 0 in distributed training
+- Transformers ≥5.0 compatibility: `load_trainer()` auto-detects whether to use `tokenizer` or `processing_class` kwarg
 
-3. **Comprehensive Testing**: All new features must include tests
-   - Write unit tests that cover multiple scenarios
-   - Test edge cases and error conditions
-   - Test integration with existing components
-   - Run `make test` before committing
+## Hydra Gotchas
 
-4. **Code Quality**: Maintain high code quality standards
-   - Code quality enforced via `ruff` for linting and formatting
-   - Use `make quality` before committing changes
-   - Follow existing code style and patterns
-   - Add docstrings for new classes and functions
+- Trainer configs define `_target_` class and `method_args`; HuggingFace `TrainingArguments` go under `trainer.args`
+- `forget_split` and `retain_split` are top-level overrides (not nested under `data.`)
+- Experiment configs use `- override /model:` syntax (with leading slash) to override defaults groups
 
-5. **Configuration Management**: Follow Hydra configuration patterns
-   - All new components should be registered in appropriate config files
-   - Use the factory pattern for component loading
-   - Support configuration overrides via command-line
-
-6. **Documentation**: Document all new features
-   - Update relevant documentation in `docs/`
-   - Add usage examples
-   - Explain design decisions and rationale
-   - Use descriptive task names for output organization
-
-### Temp File Location
+## Temp File Location
 
 ```bash
 export TMPDIR=$HOME/tmp
 mkdir -p "$TMPDIR/claude"
 ```
-
-This ensures temporary files created during training and evaluation are stored in a dedicated directory.
-
-## Lessons Learned
-
-### Hydra Configuration Patterns
-
-1. **Config Override Syntax**:
-   - Use dot notation for nested configs: `trainer.method_args.K=1000`
-   - Use `++` prefix to add new keys: `++trainer.args.bf16=true`
-   - Nested dict syntax in CLI: `model.model_args.pretrained_model_name_or_path=path/to/model`
-
-2. **Trainer Configuration**:
-   - Trainer configs define `_target_` class and `method_args`
-   - `method_args` are passed to trainer constructor
-   - HuggingFace Trainer args go in `trainer.args`
-
-3. **Dataset Configuration**:
-   - `forget_split` and `retain_split` control data splits
-   - ForgetRetainDataset wraps forget/retain datasets with different indexing
-   - Original finetune dataset must be loaded separately for batch reconstruction
-
-### Memory Optimization for Large-Scale Training
-
-1. **Lazy Loading Pattern**:
-   - Never load all training records into memory at once
-   - Use `LazyRecordLoader` to load records on-demand
-   - Delete tensors immediately after use: `del tensor; gc.collect()`
-
-2. **Chunk File Organization**:
-   - Store each step's record in separate `.pkl` file
-   - Build index from filenames (no need to read file contents)
-   - Use parallel loading with `ProcessPoolExecutor` for metadata extraction
-
-3. **Eta (Learning Rate) Caching**:
-   - Store eta values in separate JSON cache file
-   - Load eta cache at startup, update incrementally
-   - Avoids loading 2.4GB chunk files just for a single float
-
-4. **GPU Memory Management**:
-   - Use `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:64`
-   - Enable `gradient_checkpointing=true` for large models
-   - Move data to GPU only when needed, release immediately after
-
-### LMCleaner Implementation Details
-
-1. **Batch Reconstruction Priority**:
-   - In lazy loading mode, check `sample_indices` first (not `step_record`)
-   - `sample_indices` is loaded as small JSON, `step_record` requires full chunk
-
-2. **HVP Computation**:
-   - Requires batch data reconstruction from original dataset
-   - ForgetRetainDataset indices differ from finetune dataset indices
-   - Must use original finetune dataset (e.g., `locuslab/TOFU/full`) for batch reconstruction
-
-3. **Forward Propagation**:
-   - For step tz, propagate through steps tz+1 to min(tz+K, tau-1)
-   - Each propagation step requires: load eta, reconstruct batch, compute HVP
-   - Total HVP calls per forget step can be up to K (e.g., 1000)
-
-4. **Dataset Mismatch Issue**:
-   - Training uses TOFU full dataset (4000 samples, indices 0-3999)
-   - Unlearning uses ForgetRetainDataset with different indexing
-   - Solution: Load original finetune dataset with `SimpleQADataset` wrapper
-
-### Parallel Processing Best Practices
-
-1. **Multi-GPU Unlearning**:
-   - Use `CUDA_VISIBLE_DEVICES` to assign each epoch to different GPU
-   - Run epochs in parallel with independent processes
-   - Shared eta cache is safe (read-only after initial build)
-
-2. **Parallel Cache Building**:
-   - Use `ProcessPoolExecutor` with many workers (e.g., 32)
-   - Load pickle files in parallel, extract metadata only
-   - Incremental save to avoid losing progress on failure
-
-3. **Background Process Management**:
-   - Use `nohup bash script.sh > log 2>&1 &` for long-running jobs
-   - Monitor with `tail -f` and process count checks
-   - Use `pkill -9 -f pattern` to kill stuck processes
-
-### Common Debugging Patterns
-
-1. **Check GPU Utilization**:
-   ```bash
-   nvidia-smi --query-gpu=index,utilization.gpu,memory.used --format=csv,noheader
-   ```
-   - 0% utilization often means computation is CPU-bound or I/O-bound
-
-2. **Identify Bottlenecks**:
-   - `K_used=0, hvp_calls=0` in logs means batch reconstruction failed
-   - Check `sample_indices_per_step` is loaded in lazy loading mode
-   - Verify dataset indexing matches training-time indexing
-
-3. **Log Analysis**:
-   ```bash
-   grep "Applied correction" log.file | tail -5  # Check HVP execution
-   grep "Processing forget step" log.file | tail -1  # Check progress
-   ```
-
-4. **Memory Monitoring**:
-   ```bash
-   free -h  # System memory
-   ps aux | grep python | awk '{sum += $6} END {print sum/1024/1024, "GB"}'
-   ```

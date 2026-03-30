@@ -65,6 +65,12 @@ evaluate_mia "${RETRAIN_DIR}" "expA_retrain" "${RETRAIN_EVAL_JSON}"
 # LMCleaner
 evaluate_mia "$(get_unlearn_output_dir "lmcleaner")" "$(get_unlearn_task_name "lmcleaner")" "${RETRAIN_EVAL_JSON}"
 
+# LMCleaner post-finetune
+POSTFT_DIR=$(get_postft_output_dir "lmcleaner")
+if [ -d "${POSTFT_DIR}" ]; then
+    evaluate_mia "${POSTFT_DIR}" "$(get_postft_task_name "lmcleaner")" "${RETRAIN_EVAL_JSON}"
+fi
+
 # Baselines
 for METHOD in "${BASELINE_METHODS[@]}"; do
     METHOD_LOWER="${METHOD,,}"
