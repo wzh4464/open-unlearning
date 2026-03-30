@@ -2,34 +2,27 @@ FROM pytorch/pytorch:2.9.1-cuda12.6-cudnn9-devel
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# System dependencies + Slurm + ensure conda is in PATH for all shells
+# System dependencies + ensure conda is in PATH for all shells
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget unzip git tmux curl openssh-client openssh-server \
-    nvtop htop \
-    slurm-wlm slurm-client munge tini \
-    && echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/profile.d/conda.sh \
-    && echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/bash.bashrc \
-    && ln -sf /opt/conda/bin/python /usr/bin/python \
-    && ln -sf /opt/conda/bin/python /usr/bin/python3 \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+    nvtop htop sudo && \
+    echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/profile.d/conda.sh && \
+    echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/bash.bashrc && \
+    ln -sf /opt/conda/bin/python /usr/bin/python && \
+    ln -sf /opt/conda/bin/python /usr/bin/python3 && \
+    rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 # Install Node.js v20.x
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-# Install global npm packages (gemini CLI, Claude Code CLI)
+# Install global npm packages (gemini CLI + Claude Code CLI)
 # Note: Using npm for Claude Code to avoid geo-blocking from claude.ai/install.sh
 RUN npm install -g @google/gemini-cli @anthropic-ai/claude-code
 
 # Install Python dev tools
 RUN pip install --no-cache-dir ruff pytest uv
-
-# Create Slurm directories (configs will be copied later)
-RUN mkdir -p /etc/slurm /var/spool/slurmctld /var/spool/slurmd \
-    /var/log/slurm /run/munge && \
-    chown -R root:root /etc/slurm && \
-    chmod 755 /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
 
 WORKDIR /app
 
@@ -55,16 +48,8 @@ RUN pip install --no-cache-dir \
 # Build flash-attn from source (needs torch visible)
 RUN pip install flash-attn==2.8.3 --no-build-isolation
 
-# Copy code (including configs/slurm/)
+# Copy code
 COPY . .
-
-# === Slurm configuration (after COPY to allow config changes without cache invalidation) ===
-RUN cp /app/configs/slurm/slurm.conf /etc/slurm/slurm.conf && \
-    cp /app/configs/slurm/cgroup.conf /etc/slurm/cgroup.conf && \
-    cp /app/configs/slurm/gres.conf /etc/slurm/gres.conf && \
-    cp /app/configs/slurm/munge.key /etc/munge/munge.key && \
-    chmod 400 /etc/munge/munge.key && \
-    chown munge:munge /etc/munge/munge.key
 
 # Environment variables
 ENV IN_DOCKER=1
@@ -79,9 +64,31 @@ RUN echo 'export IN_DOCKER=1' >> /etc/bash.bashrc && \
     echo 'IN_DOCKER=1' >> /etc/environment && \
     echo 'GOOGLE_CLOUD_PROJECT=unlearning-484901' >> /etc/environment
 
-# Git config
+# Create user zihan with passwordless sudo
+RUN useradd -m -s /bin/bash -u 1000 zihan && \
+    echo "zihan ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/zihan && \
+    chmod 440 /etc/sudoers.d/zihan && \
+    mkdir -p /home/zihan/.ssh && \
+    echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIN5NGqyhMn7dzEYPHbBYMV+e4EAU9U7N3uqnCYyJIjhw wzh4464@gmail.com" > /home/zihan/.ssh/authorized_keys && \
+    chmod 700 /home/zihan/.ssh && \
+    chmod 600 /home/zihan/.ssh/authorized_keys && \
+    chown -R zihan:zihan /home/zihan
+
+# Copy GitHub SSH key for zihan and configure
+COPY .docker/id_ed25519_github /home/zihan/.ssh/id_ed25519_github
+RUN chmod 600 /home/zihan/.ssh/id_ed25519_github && \
+    ssh-keygen -y -f /home/zihan/.ssh/id_ed25519_github > /home/zihan/.ssh/id_ed25519_github.pub && \
+    printf "Host github.com\n    IdentityFile ~/.ssh/id_ed25519_github\n    IdentitiesOnly yes\n" > /home/zihan/.ssh/config && \
+    chmod 600 /home/zihan/.ssh/config && \
+    ssh-keyscan -t ed25519 github.com >> /home/zihan/.ssh/known_hosts 2>/dev/null && \
+    chown -R zihan:zihan /home/zihan/.ssh
+
+# Git config (root)
 RUN git config --global user.name "runpod_zihan" && \
     git config --global user.email "32484940+wzh4464@users.noreply.github.com"
+
+# Git config (zihan)
+RUN su - zihan -c 'git config --global user.name "runpod_zihan" && git config --global user.email "32484940+wzh4464@users.noreply.github.com"'
 
 # Setup dotfiles (tmux config) - will be done at runtime if /workspace/dotfiles exists
 RUN echo '[ -d /workspace/dotfiles ] && ln -sf /workspace/dotfiles/tmux/tmux.conf ~/.tmux.conf' >> /etc/bash.bashrc
@@ -90,5 +97,5 @@ RUN echo '[ -d /workspace/dotfiles ] && ln -sf /workspace/dotfiles/tmux/tmux.con
 COPY scripts/docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["sleep", "infinity"]
