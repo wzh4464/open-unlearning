@@ -40,3 +40,18 @@ Model: Llama-3.2-1B-Instruct | Data: TOFU forget01 | K=10 | Fisher HVP
 
 Subspace noise concentrates noise in k-dim subspace. With β=0.001, the orthogonal
 complement gets only 0.1% of σ_∥, reducing effective noise by ~1000× vs isotropic.
+
+## Subspace k Sweep (ε=1.0, β=0.001, Δ_cert=0.01) — FIXED projector
+
+| k | m_utility | f_quality | f_Prob | f_truth_ratio |
+|---|:---------:|:---------:|:------:|:-------------:|
+| 1 | 0.321 | 0.990 | 0.167 | 0.781 |
+| 2 | 0.320 | 0.990 | 0.166 | 0.782 |
+| 3 | 0.320 | 0.990 | 0.167 | 0.783 |
+| 4 | 0.320 | 0.990 | 0.167 | 0.781 |
+| 5 | 0.320 | 1.000 | 0.166 | 0.782 |
+
+k=1-5 results are nearly identical because β=0.001 concentrates almost all
+noise in the orthogonal complement, making the subspace rank k irrelevant.
+The projector fix (float64 norm instead of QR) resolved the k>=2 crash
+caused by numerical instability of torch.linalg.qr at 1.24B dimensions.
