@@ -1,7 +1,0 @@
-{
-  "unlearning_time_seconds": 6484.970331871882,
-  "total_steps": 63,
-  "peak_gpu_memory_mb": 31500,
-  "method": "LMCleaner_K10",
-  "peak_gpu_memory_note": "estimated from nvidia-smi during run (~31.5GB for 3B model + Fisher HVP)"
-}
