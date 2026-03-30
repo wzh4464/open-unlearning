@@ -4,13 +4,24 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # System dependencies + ensure conda is in PATH for all shells
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget unzip git tmux curl openssh-client openssh-server \
-    nvtop htop sudo tini && \
+    wget unzip git curl openssh-client openssh-server \
+    nvtop htop sudo tini \
+    libevent-dev libncurses-dev build-essential bison pkg-config && \
     echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/profile.d/conda.sh && \
     echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/bash.bashrc && \
     ln -sf /opt/conda/bin/python /usr/bin/python && \
     ln -sf /opt/conda/bin/python /usr/bin/python3 && \
     rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+# Build tmux 3.5a from source (apt only has 3.2a, need 3.3+ for allow-passthrough)
+RUN cd /tmp && \
+    wget -q https://github.com/tmux/tmux/releases/download/3.5a/tmux-3.5a.tar.gz && \
+    tar xzf tmux-3.5a.tar.gz && \
+    cd tmux-3.5a && \
+    ./configure --prefix=/usr/local && \
+    make -j"$(nproc)" && \
+    make install && \
+    cd / && rm -rf /tmp/tmux-3.5a*
 
 # Install Node.js v20.x
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
