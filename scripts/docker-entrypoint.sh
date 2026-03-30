@@ -32,7 +32,7 @@ if [ -n "$SSH_PRIVATE_KEY" ]; then
     ssh-keygen -y -f ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub 2>/dev/null || true
 
     # Add GitHub to known hosts
-    ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+    ssh-keygen -F github.com > /dev/null 2>&1 || ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
 
     echo "SSH key loaded from environment variable"
 fi
@@ -102,7 +102,7 @@ if [ -n "$SSH_PRIVATE_KEY" ]; then
     echo "$SSH_PRIVATE_KEY" | base64 -d > /home/zihan/.ssh/id_ed25519
     chmod 600 /home/zihan/.ssh/id_ed25519
     ssh-keygen -y -f /home/zihan/.ssh/id_ed25519 > /home/zihan/.ssh/id_ed25519.pub 2>/dev/null || true
-    ssh-keyscan -t ed25519 github.com >> /home/zihan/.ssh/known_hosts 2>/dev/null
+    ssh-keygen -F github.com -f /home/zihan/.ssh/known_hosts > /dev/null 2>&1 || ssh-keyscan -t ed25519 github.com >> /home/zihan/.ssh/known_hosts 2>/dev/null
     chown -R zihan:zihan /home/zihan/.ssh
 fi
 
@@ -147,7 +147,8 @@ fi
 # === Setup /app git repo (idempotent) ===
 if [ ! -d /app/.git ]; then
     cd /app
-    su - zihan -c 'cd /app && git init -b main && git remote add origin git@github.com:wzh4464/open-unlearning.git && git fetch origin && git reset origin/main'
+    su - zihan -c 'cd /app && git init -b main && git remote add origin git@github.com:wzh4464/open-unlearning.git && git fetch origin && git reset origin/main' \
+        || echo "Warning: git repo setup failed (network issue?), skipping"
     echo "Git repo initialized in /app"
 fi
 

@@ -77,7 +77,7 @@ RUN useradd -m -s /bin/bash -u 1000 zihan && \
 # Pre-configure GitHub SSH (key injected at runtime via GITHUB_SSH_KEY env var)
 RUN printf "Host github.com\n    IdentityFile ~/.ssh/id_ed25519_github\n    IdentitiesOnly yes\n" > /home/zihan/.ssh/config && \
     chmod 600 /home/zihan/.ssh/config && \
-    ssh-keyscan -t ed25519 github.com >> /home/zihan/.ssh/known_hosts 2>/dev/null && \
+    (ssh-keyscan -t ed25519 github.com >> /home/zihan/.ssh/known_hosts 2>/dev/null || true) && \
     chown -R zihan:zihan /home/zihan/.ssh
 
 # Set /app ownership to zihan at build time
