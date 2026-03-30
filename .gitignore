@@ -1,4 +1,5 @@
 # custom .gitignore
+.docker/
 data
 saves
 submit.py

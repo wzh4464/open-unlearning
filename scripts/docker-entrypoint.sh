@@ -32,7 +32,7 @@ if [ -n "$SSH_PRIVATE_KEY" ]; then
     ssh-keygen -y -f ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub 2>/dev/null || true
 
     # Add GitHub to known hosts
-    ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+    ssh-keygen -F github.com > /dev/null 2>&1 || ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
 
     echo "SSH key loaded from environment variable"
 fi
@@ -49,10 +49,17 @@ fi
 if [ -n "$PUBLIC_KEY" ]; then
     echo "Configuring SSH server..."
     mkdir -p /var/run/sshd
+    # Root SSH setup
     mkdir -p ~/.ssh
     chmod 700 ~/.ssh
-    echo "$PUBLIC_KEY" >> ~/.ssh/authorized_keys
+    grep -qF "$PUBLIC_KEY" ~/.ssh/authorized_keys 2>/dev/null || echo "$PUBLIC_KEY" >> ~/.ssh/authorized_keys
     chmod 600 ~/.ssh/authorized_keys
+    # Also add to zihan user (idempotent)
+    mkdir -p /home/zihan/.ssh
+    grep -qF "$PUBLIC_KEY" /home/zihan/.ssh/authorized_keys 2>/dev/null || echo "$PUBLIC_KEY" >> /home/zihan/.ssh/authorized_keys
+    chmod 700 /home/zihan/.ssh
+    chmod 600 /home/zihan/.ssh/authorized_keys
+    chown -R zihan:zihan /home/zihan/.ssh
     ssh-keygen -A
     sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin yes/' /etc/ssh/sshd_config
     sed -i 's/^#\?PubkeyAuthentication .*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
@@ -64,6 +71,62 @@ if [ -n "$PUBLIC_KEY" ]; then
         echo "SSHD already running"
     fi
 fi
+
+# === Setup zihan user environment (idempotent) ===
+if ! grep -q 'IN_DOCKER=1' /home/zihan/.bashrc 2>/dev/null; then
+    cat >> /home/zihan/.bashrc << 'ZIHAN_ENV'
+export PATH=/opt/conda/bin:$PATH
+export HF_HOME=/workspace/.cache/huggingface
+export TRANSFORMERS_CACHE=/workspace/.cache/huggingface/transformers
+export HF_DATASETS_CACHE=/workspace/.cache/huggingface/datasets
+export TMPDIR=/workspace/tmp
+export IN_DOCKER=1
+export GOOGLE_CLOUD_PROJECT=unlearning-484901
+[ -d /workspace/dotfiles ] && ln -sf /workspace/dotfiles/tmux/tmux.conf ~/.tmux.conf
+ZIHAN_ENV
+    [ -f /workspace/.config/bashrc_custom ] && cat /workspace/.config/bashrc_custom >> /home/zihan/.bashrc
+    chown zihan:zihan /home/zihan/.bashrc
+fi
+
+# === Propagate HF token to zihan ===
+if [ -n "$HF_TOKEN" ]; then
+    mkdir -p /home/zihan/.cache/huggingface
+    echo "$HF_TOKEN" > /home/zihan/.cache/huggingface/token
+    chmod 600 /home/zihan/.cache/huggingface/token
+    chown -R zihan:zihan /home/zihan/.cache
+fi
+
+# === Propagate SSH private key to zihan ===
+if [ -n "$SSH_PRIVATE_KEY" ]; then
+    mkdir -p /home/zihan/.ssh
+    echo "$SSH_PRIVATE_KEY" | base64 -d > /home/zihan/.ssh/id_ed25519
+    chmod 600 /home/zihan/.ssh/id_ed25519
+    ssh-keygen -y -f /home/zihan/.ssh/id_ed25519 > /home/zihan/.ssh/id_ed25519.pub 2>/dev/null || true
+    ssh-keygen -F github.com -f /home/zihan/.ssh/known_hosts > /dev/null 2>&1 || ssh-keyscan -t ed25519 github.com >> /home/zihan/.ssh/known_hosts 2>/dev/null
+    chown -R zihan:zihan /home/zihan/.ssh
+fi
+
+# === Inject GitHub SSH key for zihan (runtime secret) ===
+# GITHUB_SSH_KEY should be base64-encoded private key
+if [ -n "$GITHUB_SSH_KEY" ]; then
+    mkdir -p /home/zihan/.ssh
+    echo "$GITHUB_SSH_KEY" | base64 -d > /home/zihan/.ssh/id_ed25519_github
+    chmod 600 /home/zihan/.ssh/id_ed25519_github
+    chown zihan:zihan /home/zihan/.ssh/id_ed25519_github
+    echo "GitHub SSH key loaded for zihan"
+fi
+
+# === Propagate SSH config to zihan ===
+if [ -f /workspace/.config/ssh_config ]; then
+    mkdir -p /home/zihan/.ssh
+    cp /workspace/.config/ssh_config /home/zihan/.ssh/config
+    chmod 644 /home/zihan/.ssh/config
+    chown -R zihan:zihan /home/zihan/.ssh
+fi
+
+# Fix /workspace ownership (only top-level dirs, /app is owned at build time)
+chown zihan:zihan /workspace /workspace/.cache /workspace/.config \
+    /workspace/saves /workspace/data /workspace/tmp 2>/dev/null || true
 
 # === Setup Git config from workspace (non-sensitive) ===
 if [ -f /workspace/.config/gitconfig ]; then
@@ -81,38 +144,13 @@ fi
 [ -L /app/saves ] && [ "$(readlink /app/saves)" = "/workspace/saves" ] || ln -sfn /workspace/saves /app/saves
 [ -L /app/data ] && [ "$(readlink /app/data)" = "/workspace/data" ] || ln -sfn /workspace/data /app/data
 
-# === Slurm setup ===
-echo "Setting up Slurm..."
-
-# Create required directories with proper permissions
-mkdir -p /run/munge /var/log/munge /var/lib/munge /var/log/slurm \
-         /var/spool/slurmctld /var/spool/slurmd
-chown -R munge:munge /run/munge /var/log/munge /var/lib/munge /etc/munge
-chmod 700 /run/munge /var/log/munge /var/lib/munge
-chmod 755 /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
-
-# Auto-detect system resources and update slurm.conf
-CPUS=$(nproc)
-# Get total memory in MB, leave ~5% for system overhead (minimum 8GB)
-TOTAL_MEM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-TOTAL_MEM_MB=$(( TOTAL_MEM_KB / 1024 ))
-HEADROOM=$(( TOTAL_MEM_MB * 5 / 100 ))
-[ $HEADROOM -lt 8192 ] && HEADROOM=8192
-REAL_MEM=$(( TOTAL_MEM_MB - HEADROOM ))
-
-# Detect GPUs
-if command -v nvidia-smi &> /dev/null; then
-    GPU_COUNT=$(nvidia-smi --query-gpu=name --format=csv,noheader | wc -l)
-else
-    GPU_COUNT=0
+# === Setup /app git repo (idempotent) ===
+if [ ! -d /app/.git ]; then
+    cd /app
+    su - zihan -c 'cd /app && git init -b main && git remote add origin git@github.com:wzh4464/open-unlearning.git && git fetch origin && git reset origin/main' \
+        || echo "Warning: git repo setup failed (network issue?), skipping"
+    echo "Git repo initialized in /app"
 fi
-
-echo "Detected: CPUs=$CPUS, RealMemory=${REAL_MEM}MB, GPUs=$GPU_COUNT"
-
-# Update slurm.conf with detected resources
-sed -i "s/NodeName=localhost CPUs=[0-9]* RealMemory=[0-9]* Gres=gpu:[0-9]*/NodeName=localhost CPUs=$CPUS RealMemory=$REAL_MEM Gres=gpu:$GPU_COUNT/" /etc/slurm/slurm.conf
-
-echo "Slurm configuration updated"
 
 # === First-run initialization ===
 if [ ! -f /workspace/.initialized ]; then
@@ -131,23 +169,6 @@ if [ ! -f /workspace/.initialized ]; then
     touch /workspace/.initialized
     echo "=== Initialization complete ==="
 fi
-
-# Start Slurm services
-echo "Starting munge..."
-# Use --force to bypass ownership check issues in containers
-/usr/sbin/munged --force || echo "Warning: munged failed to start"
-sleep 1
-
-echo "Starting slurmctld..."
-/usr/sbin/slurmctld
-sleep 1
-
-echo "Starting slurmd..."
-/usr/sbin/slurmd
-sleep 1
-
-echo "Slurm services started. Checking status..."
-sinfo || echo "Warning: sinfo failed, Slurm may need more time to initialize"
 
 # If no command provided (RunPod sometimes overrides CMD), keep container alive
 if [ $# -eq 0 ]; then
