@@ -47,7 +47,7 @@ for K_VAL in 10 20 30 40 50; do
         trainer.args.seed=${SEED} \
         ++trainer.args.bf16=true \
         trainer.args.efficiency_tracking.enabled=true \
-        model.model_args.attn_implementation=eager
+        model.model_args.attn_implementation=${ATTN_IMPL}
     STEP_END=$(date +%s)
     echo "LMCleaner K=${K_VAL} done ($(( STEP_END - STEP_START ))s)"
 done
@@ -95,6 +95,7 @@ if [ ! -f "${RETRAIN_EVAL_JSON}" ]; then
         task_name="expA_retrain_eval" \
         model.model_args.pretrained_model_name_or_path="${RETRAIN_DIR}" \
         model.tokenizer_args.pretrained_model_name_or_path="${BASE_MODEL_PATH}" \
+        model.model_args.attn_implementation=${ATTN_IMPL} \
         paths.output_dir="${RETRAIN_DIR}/evals"
 fi
 
@@ -120,6 +121,7 @@ eval_model() {
         task_name="${task_name}_eval" \
         model.model_args.pretrained_model_name_or_path="${model_path}" \
         model.tokenizer_args.pretrained_model_name_or_path="${BASE_MODEL_PATH}" \
+        model.model_args.attn_implementation=${ATTN_IMPL} \
         paths.output_dir="${eval_dir}" \
         retain_logs_path="${RETRAIN_EVAL_JSON}" \
         "${original_override[@]}"

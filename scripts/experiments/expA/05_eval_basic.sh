@@ -55,6 +55,7 @@ evaluate_model() {
         task_name="${task_name}_eval" \
         model.model_args.pretrained_model_name_or_path="${model_path}" \
         model.tokenizer_args.pretrained_model_name_or_path="${BASE_MODEL_PATH}" \
+        model.model_args.attn_implementation=${ATTN_IMPL} \
         paths.output_dir="${eval_output_dir}" \
         "${retain_override[@]}" \
         "${original_override[@]}"

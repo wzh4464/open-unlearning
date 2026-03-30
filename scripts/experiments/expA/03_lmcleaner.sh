@@ -51,7 +51,7 @@ $PYTHON_CMD src/train.py --config-name=unlearn.yaml \
     trainer.args.seed=${SEED} \
     ++trainer.args.bf16=true \
     trainer.args.efficiency_tracking.enabled=true \
-    model.model_args.attn_implementation=eager \
+    model.model_args.attn_implementation=${ATTN_IMPL} \
     trainer.method_args.use_historical_params=true
 
 echo ""

@@ -76,6 +76,7 @@ SEED=${SEED:-0}
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True,max_split_size_mb:64
 export HF_HUB_DISABLE_TELEMETRY=1
 PYTHON_CMD="python"
+ATTN_IMPL="${ATTN_IMPL:-sdpa}"  # sdpa for B200, flash_attention_2 for A100/H100
 
 # ============================================
 # Helper Functions

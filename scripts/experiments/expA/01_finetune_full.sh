@@ -32,6 +32,7 @@ $PYTHON_CMD src/train.py --config-name=train.yaml \
     model="${MODEL_NAME}" \
     model.model_args.pretrained_model_name_or_path="${BASE_MODEL_PATH}" \
     model.tokenizer_args.pretrained_model_name_or_path="${BASE_MODEL_PATH}" \
+    model.model_args.attn_implementation=${ATTN_IMPL} \
     trainer.args.num_train_epochs=${NUM_EPOCHS} \
     trainer.args.learning_rate=${LEARNING_RATE} \
     trainer.args.weight_decay=${WEIGHT_DECAY} \

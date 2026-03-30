@@ -58,6 +58,7 @@ for METHOD in "${BASELINE_METHODS[@]}"; do
         trainer.args.seed=${SEED} \
         ++trainer.args.bf16=true \
         trainer.args.efficiency_tracking.enabled=true \
+        model.model_args.attn_implementation=${ATTN_IMPL} \
         "${METHOD_OVERRIDES[@]}"
 
     echo "${METHOD} complete!"
