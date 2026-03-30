@@ -5,7 +5,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # System dependencies + ensure conda is in PATH for all shells
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget unzip git tmux curl openssh-client openssh-server \
-    nvtop htop sudo && \
+    nvtop htop sudo tini && \
     echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/profile.d/conda.sh && \
     echo 'export PATH=/opt/conda/bin:$PATH' >> /etc/bash.bashrc && \
     ln -sf /opt/conda/bin/python /usr/bin/python && \
@@ -74,14 +74,14 @@ RUN useradd -m -s /bin/bash -u 1000 zihan && \
     chmod 600 /home/zihan/.ssh/authorized_keys && \
     chown -R zihan:zihan /home/zihan
 
-# Copy GitHub SSH key for zihan and configure
-COPY .docker/id_ed25519_github /home/zihan/.ssh/id_ed25519_github
-RUN chmod 600 /home/zihan/.ssh/id_ed25519_github && \
-    ssh-keygen -y -f /home/zihan/.ssh/id_ed25519_github > /home/zihan/.ssh/id_ed25519_github.pub && \
-    printf "Host github.com\n    IdentityFile ~/.ssh/id_ed25519_github\n    IdentitiesOnly yes\n" > /home/zihan/.ssh/config && \
+# Pre-configure GitHub SSH (key injected at runtime via GITHUB_SSH_KEY env var)
+RUN printf "Host github.com\n    IdentityFile ~/.ssh/id_ed25519_github\n    IdentitiesOnly yes\n" > /home/zihan/.ssh/config && \
     chmod 600 /home/zihan/.ssh/config && \
     ssh-keyscan -t ed25519 github.com >> /home/zihan/.ssh/known_hosts 2>/dev/null && \
     chown -R zihan:zihan /home/zihan/.ssh
+
+# Set /app ownership to zihan at build time
+RUN chown -R zihan:zihan /app
 
 # Git config (root)
 RUN git config --global user.name "runpod_zihan" && \
@@ -97,5 +97,5 @@ RUN echo '[ -d /workspace/dotfiles ] && ln -sf /workspace/dotfiles/tmux/tmux.con
 COPY scripts/docker-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/entrypoint.sh"]
 CMD ["sleep", "infinity"]

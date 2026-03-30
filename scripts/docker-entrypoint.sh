@@ -52,11 +52,11 @@ if [ -n "$PUBLIC_KEY" ]; then
     # Root SSH setup
     mkdir -p ~/.ssh
     chmod 700 ~/.ssh
-    echo "$PUBLIC_KEY" >> ~/.ssh/authorized_keys
+    grep -qF "$PUBLIC_KEY" ~/.ssh/authorized_keys 2>/dev/null || echo "$PUBLIC_KEY" >> ~/.ssh/authorized_keys
     chmod 600 ~/.ssh/authorized_keys
-    # Also add to zihan user
+    # Also add to zihan user (idempotent)
     mkdir -p /home/zihan/.ssh
-    echo "$PUBLIC_KEY" >> /home/zihan/.ssh/authorized_keys
+    grep -qF "$PUBLIC_KEY" /home/zihan/.ssh/authorized_keys 2>/dev/null || echo "$PUBLIC_KEY" >> /home/zihan/.ssh/authorized_keys
     chmod 700 /home/zihan/.ssh
     chmod 600 /home/zihan/.ssh/authorized_keys
     chown -R zihan:zihan /home/zihan/.ssh
@@ -92,6 +92,7 @@ fi
 if [ -n "$HF_TOKEN" ]; then
     mkdir -p /home/zihan/.cache/huggingface
     echo "$HF_TOKEN" > /home/zihan/.cache/huggingface/token
+    chmod 600 /home/zihan/.cache/huggingface/token
     chown -R zihan:zihan /home/zihan/.cache
 fi
 
@@ -105,6 +106,16 @@ if [ -n "$SSH_PRIVATE_KEY" ]; then
     chown -R zihan:zihan /home/zihan/.ssh
 fi
 
+# === Inject GitHub SSH key for zihan (runtime secret) ===
+# GITHUB_SSH_KEY should be base64-encoded private key
+if [ -n "$GITHUB_SSH_KEY" ]; then
+    mkdir -p /home/zihan/.ssh
+    echo "$GITHUB_SSH_KEY" | base64 -d > /home/zihan/.ssh/id_ed25519_github
+    chmod 600 /home/zihan/.ssh/id_ed25519_github
+    chown zihan:zihan /home/zihan/.ssh/id_ed25519_github
+    echo "GitHub SSH key loaded for zihan"
+fi
+
 # === Propagate SSH config to zihan ===
 if [ -f /workspace/.config/ssh_config ]; then
     mkdir -p /home/zihan/.ssh
@@ -113,9 +124,9 @@ if [ -f /workspace/.config/ssh_config ]; then
     chown -R zihan:zihan /home/zihan/.ssh
 fi
 
-# Give zihan ownership of /app and /workspace
-chown -R zihan:zihan /app 2>/dev/null || true
-chown -R zihan:zihan /workspace 2>/dev/null || true
+# Fix /workspace ownership (only top-level dirs, /app is owned at build time)
+chown zihan:zihan /workspace /workspace/.cache /workspace/.config \
+    /workspace/saves /workspace/data /workspace/tmp 2>/dev/null || true
 
 # === Setup Git config from workspace (non-sensitive) ===
 if [ -f /workspace/.config/gitconfig ]; then
